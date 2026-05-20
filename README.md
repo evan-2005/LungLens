@@ -1,6 +1,6 @@
-# LungLens (formerly Chestist)
+# LungLens
 
-**LungLens** is an advanced, Apple-inspired clinical diagnostic web application designed to classify chest X-rays into three distinct categories: **Normal**, **Pneumonia**, and **Tuberculosis (TB)**. 
+**LungLens** is an advanced, diagnostic web application designed to classify chest X-rays into three distinct categories: **Normal**, **Pneumonia**, and **Tuberculosis (TB)**. 
 
 Powered by a robust **DenseNet-121** deep learning architecture and wrapped in a beautiful, highly polished Gradio interface, LungLens provides both clinical probability metrics and **Grad-CAM visual heatmaps** to ensure the AI's diagnostic reasoning is completely transparent to clinicians.
 
