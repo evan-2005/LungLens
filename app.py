@@ -387,6 +387,10 @@ if os.path.exists(model_path):
 
 # Premium Gradio UI Design (LungLens Apple Aesthetic)
 apple_css = """
+:root {
+    --color-accent: #0071E3 !important;
+    --color-accent-soft: rgba(0, 113, 227, 0.2) !important;
+}
 body, .gradio-container {
     background-color: #F5F5F7 !important;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
@@ -412,6 +416,11 @@ body, .gradio-container {
     background: rgba(40, 40, 42, 0.7) !important;
     border: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
+.centered-card {
+    margin: 0 auto !important;
+    max-width: 600px !important;
+    float: none !important;
+}
 h1, h2, h3 {
     font-weight: 700 !important;
     letter-spacing: -0.015em !important;
@@ -427,7 +436,7 @@ p, span, label {
 .dark p, .dark span, .dark label {
     color: #8D8D93 !important;
 }
-button, .primary-btn {
+.primary-btn {
     border-radius: 9999px !important;
     background-color: #0071E3 !important;
     color: white !important;
@@ -437,7 +446,7 @@ button, .primary-btn {
     box-shadow: none !important;
     transition: transform 0.2s ease, background-color 0.2s ease !important;
 }
-button:hover, .primary-btn:hover {
+.primary-btn:hover {
     background-color: #0077ED !important;
     transform: scale(1.02) !important;
 }
@@ -448,6 +457,13 @@ button:hover, .primary-btn:hover {
 }
 .dark .upload-zone .gradio-image {
     border-color: #424245 !important;
+}
+.upload-zone .gradio-image:hover, .upload-zone .gradio-image:focus-within {
+    border-color: #0071E3 !important;
+}
+/* Hide built-with-gradio footer */
+footer {
+    display: none !important;
 }
 /* Smooth transitions */
 .fade-in {
@@ -472,7 +488,7 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
     
     with gr.Tab("Diagnostic Inference"):
         # Upload State View
-        with gr.Column(elem_classes="upload-zone fade-in custom-panel", visible=True) as upload_container:
+        with gr.Column(elem_classes="upload-zone fade-in custom-panel centered-card", visible=True) as upload_container:
             gr.Markdown("### Upload Scan")
             input_img = gr.Image(type="pil", label="", elem_classes="upload-zone")
             target_viz = gr.Dropdown(
@@ -480,7 +496,7 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
                 value="Pneumonia", 
                 label="Target Visualization Class"
             )
-            predict_btn = gr.Button("Diagnose", variant="primary")
+            predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
         
         # Results State View
         with gr.Column(visible=False, elem_classes="fade-in custom-panel") as results_container:
@@ -490,7 +506,7 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
                 
                 with gr.Column(scale=1):
                     output_markdown = gr.Markdown()
-                    reset_btn = gr.Button("Analyze Another Scan")
+                    reset_btn = gr.Button("Analyze Another Scan", elem_classes="primary-btn")
 
         predict_btn.click(
             fn=predict_image,
@@ -529,7 +545,7 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
                     lr_input = gr.Number(
                         value=0.0001, label="Learning Rate", precision=6
                     )
-                    train_btn = gr.Button("Start Training")
+                    train_btn = gr.Button("Start Training", elem_classes="primary-btn")
                     status_box = gr.Textbox(value=training_status, label="Status", interactive=False)
                     
                 with gr.Column(scale=2):
@@ -537,7 +553,7 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
                         value="", label="Terminal Logs", 
                         interactive=False, lines=15, max_lines=30
                     )
-                    refresh_btn = gr.Button("Refresh Logs")
+                    refresh_btn = gr.Button("Refresh Logs", elem_classes="primary-btn")
                 
         train_btn.click(
             fn=start_training,
