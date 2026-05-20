@@ -365,9 +365,9 @@ def predict_image(image, target_class_name):
     tb_prob = probabilities[2] * 100
     
     findings_text = f"### Findings\n\nThe model analyzed the chest X-ray and found a **{top_prob:.1f}% probability of {top_class}**.\n\n"
-    findings_text += f"- **Normal** tissue indicators are at {normal_prob:.1f}%.\n"
-    findings_text += f"- **Pneumonia** indicators are at {pneumonia_prob:.1f}%.\n"
-    findings_text += f"- **Tuberculosis (TB)** indicators are at {tb_prob:.1f}%.\n\n"
+    findings_text += f"- **Normal**: {normal_prob:.1f}%\n"
+    findings_text += f"- **Pneumonia**: {pneumonia_prob:.1f}%\n"
+    findings_text += f"- **Tuberculosis (TB)**: {tb_prob:.1f}%\n\n"
     
     if top_class == "Normal":
         findings_text += "No significant abnormalities detected in the provided scan. The lungs appear clear."
@@ -375,6 +375,21 @@ def predict_image(image, target_class_name):
         findings_text += "The scan shows indications consistent with Pneumonia. Please refer to the Grad-CAM heatmap to visualize areas of potential consolidation or infection."
     else:
         findings_text += "The scan shows indications consistent with Tuberculosis. Please refer to the Grad-CAM heatmap to visualize focal lesions or cavities."
+
+    # Get index of target visualization class
+    target_idx = CLASSES.index(target_class_name)
+    
+    # Generate Grad-CAM Heatmap
+    heatmap = grad_cam.generate_heatmap(input_tensor, target_idx)
+    grad_cam.remove_hooks()
+    
+    # Create superimposed visualization
+    heatmap_colored = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
+    heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
+    
+    # Overlay heatmap on original image
+    superimposed_img = heatmap_colored * 0.4 + orig_img * 0.6
+    superimposed_img = np.clip(superimposed_img, 0, 255).astype(np.uint8)
         
     return findings_text, superimposed_img, gr.update(visible=False), gr.update(visible=True)
 
@@ -429,11 +444,11 @@ h1, h2, h3 {
 .dark h1, .dark h2, .dark h3 {
     color: #F5F5F7 !important;
 }
-p, span, label {
+p, label {
     font-weight: 400 !important;
     color: #86868B !important;
 }
-.dark p, .dark span, .dark label {
+.dark p, .dark label {
     color: #8D8D93 !important;
 }
 .primary-btn {
@@ -478,7 +493,7 @@ footer {
 def reset_view():
     return gr.update(visible=True), gr.update(visible=False), None, None
 
-with gr.Blocks(css=apple_css, title="LungLens") as demo:
+with gr.Blocks(title="LungLens") as demo:
     gr.Markdown(
         """
         # LungLens
@@ -576,5 +591,5 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
         )
 
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1", share=False)
+    demo.launch(server_name="127.0.0.1", share=False, css=apple_css)
 
