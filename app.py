@@ -397,7 +397,7 @@ body, .gradio-container {
 .gradio-container {
     max-width: 1200px !important;
 }
-.block, .panel {
+.custom-panel {
     background: rgba(255, 255, 255, 0.7) !important;
     backdrop-filter: blur(20px) !important;
     -webkit-backdrop-filter: blur(20px) !important;
@@ -408,7 +408,7 @@ body, .gradio-container {
     margin-bottom: 16px !important;
     transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
-.dark .block, .dark .panel {
+.dark .custom-panel {
     background: rgba(40, 40, 42, 0.7) !important;
     border: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
@@ -472,7 +472,7 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
     
     with gr.Tab("Diagnostic Inference"):
         # Upload State View
-        with gr.Column(elem_classes="upload-zone fade-in", visible=True) as upload_container:
+        with gr.Column(elem_classes="upload-zone fade-in custom-panel", visible=True) as upload_container:
             gr.Markdown("### Upload Scan")
             input_img = gr.Image(type="pil", label="", elem_classes="upload-zone")
             target_viz = gr.Dropdown(
@@ -483,7 +483,7 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
             predict_btn = gr.Button("Diagnose", variant="primary")
         
         # Results State View
-        with gr.Column(visible=False, elem_classes="fade-in") as results_container:
+        with gr.Column(visible=False, elem_classes="fade-in custom-panel") as results_container:
             with gr.Row():
                 with gr.Column(scale=1):
                     output_heatmap = gr.Image(label="Grad-CAM Analysis")
@@ -505,13 +505,14 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
         )
         
     with gr.Tab("Model Training"):
-        gr.Markdown(
-            """
-            ### Train Classifier
-            Adjust parameters to fine-tune the model on your dataset.
-            """
-        )
-        with gr.Row():
+        with gr.Column(elem_classes="custom-panel"):
+            gr.Markdown(
+                """
+                ### Train Classifier
+                Adjust parameters to fine-tune the model on your dataset.
+                """
+            )
+            with gr.Row():
             with gr.Column(scale=1):
                 num_samples_slider = gr.Slider(
                     minimum=100, maximum=10000, value=1000, step=100, 
