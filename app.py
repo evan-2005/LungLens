@@ -356,24 +356,27 @@ def predict_image(image, target_class_name):
     outputs = model(input_tensor)
     probabilities = torch.nn.functional.softmax(outputs, dim=1)[0].detach().cpu()
     
-    result = {CLASSES[i]: float(probabilities[i]) for i in range(3)}
+    top_class_idx = int(torch.argmax(probabilities).item())
+    top_class = CLASSES[top_class_idx]
+    top_prob = probabilities[top_class_idx] * 100
     
-    # Get index of target visualization class
-    target_idx = CLASSES.index(target_class_name)
+    normal_prob = probabilities[0] * 100
+    pneumonia_prob = probabilities[1] * 100
+    tb_prob = probabilities[2] * 100
     
-    # Generate Grad-CAM Heatmap
-    heatmap = grad_cam.generate_heatmap(input_tensor, target_idx)
-    grad_cam.remove_hooks()
+    findings_text = f"### Findings\n\nThe model analyzed the chest X-ray and found a **{top_prob:.1f}% probability of {top_class}**.\n\n"
+    findings_text += f"- **Normal** tissue indicators are at {normal_prob:.1f}%.\n"
+    findings_text += f"- **Pneumonia** indicators are at {pneumonia_prob:.1f}%.\n"
+    findings_text += f"- **Tuberculosis (TB)** indicators are at {tb_prob:.1f}%.\n\n"
     
-    # Create superimposed visualization
-    heatmap_colored = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
-    heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
-    
-    # Overlay heatmap on original image
-    superimposed_img = heatmap_colored * 0.4 + orig_img * 0.6
-    superimposed_img = np.clip(superimposed_img, 0, 255).astype(np.uint8)
-    
-    return result, superimposed_img
+    if top_class == "Normal":
+        findings_text += "No significant abnormalities detected in the provided scan. The lungs appear clear."
+    elif top_class == "Pneumonia":
+        findings_text += "The scan shows indications consistent with Pneumonia. Please refer to the Grad-CAM heatmap to visualize areas of potential consolidation or infection."
+    else:
+        findings_text += "The scan shows indications consistent with Tuberculosis. Please refer to the Grad-CAM heatmap to visualize focal lesions or cavities."
+        
+    return findings_text, superimposed_img, gr.update(visible=False), gr.update(visible=True)
 
 # Initial load if file exists
 if os.path.exists(model_path):
@@ -382,48 +385,137 @@ if os.path.exists(model_path):
     model.to(device)
     model.eval()
 
-# Premium Gradio UI Design
-with gr.Blocks() as demo:
+# Premium Gradio UI Design (LungLens Apple Aesthetic)
+apple_css = """
+body, .gradio-container {
+    background-color: #F5F5F7 !important;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+}
+.dark body, .dark .gradio-container {
+    background-color: #1C1C1E !important;
+}
+.gradio-container {
+    max-width: 1200px !important;
+}
+.block, .panel {
+    background: rgba(255, 255, 255, 0.7) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    border: 1px solid rgba(0, 0, 0, 0.05) !important;
+    border-radius: 20px !important;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.02) !important;
+    padding: 24px !important;
+    margin-bottom: 16px !important;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.dark .block, .dark .panel {
+    background: rgba(40, 40, 42, 0.7) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+h1, h2, h3 {
+    font-weight: 700 !important;
+    letter-spacing: -0.015em !important;
+    color: #1D1D1F !important;
+}
+.dark h1, .dark h2, .dark h3 {
+    color: #F5F5F7 !important;
+}
+p, span, label {
+    font-weight: 400 !important;
+    color: #86868B !important;
+}
+.dark p, .dark span, .dark label {
+    color: #8D8D93 !important;
+}
+button, .primary-btn {
+    border-radius: 9999px !important;
+    background-color: #0071E3 !important;
+    color: white !important;
+    font-weight: 600 !important;
+    border: none !important;
+    padding: 12px 24px !important;
+    box-shadow: none !important;
+    transition: transform 0.2s ease, background-color 0.2s ease !important;
+}
+button:hover, .primary-btn:hover {
+    background-color: #0077ED !important;
+    transform: scale(1.02) !important;
+}
+.upload-zone .gradio-image {
+    border: 2px dashed #D2D2D7 !important;
+    border-radius: 20px !important;
+    background: transparent !important;
+}
+.dark .upload-zone .gradio-image {
+    border-color: #424245 !important;
+}
+/* Smooth transitions */
+.fade-in {
+    animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+"""
+
+def reset_view():
+    return gr.update(visible=True), gr.update(visible=False), None, None
+
+with gr.Blocks(css=apple_css, title="LungLens") as demo:
     gr.Markdown(
         """
-        # 🩺 Chestist - 3-Class X-Ray Diagnostician Dashboard
-        Relabeling chest X-Rays into **Normal, Pneumonia, and Tuberculosis (TB)** classes.
+        # LungLens
+        Advanced Diagnostic Imaging
         """
     )
     
-    with gr.Tab("Inference & Visual Diagnostic (Grad-CAM)"):
-        with gr.Row():
-            with gr.Column():
-                input_img = gr.Image(type="pil", label="Upload Chest X-Ray")
-                target_viz = gr.Dropdown(
-                    choices=CLASSES, 
-                    value="Pneumonia", 
-                    label="Visualize focus region for class:"
-                )
-                predict_btn = gr.Button("Diagnose & Generate Heatmap", variant="primary")
-            
-            with gr.Column():
-                output_label = gr.Label(num_top_classes=3, label="Diagnosis Probability")
-                output_heatmap = gr.Image(label="Grad-CAM Focus Region (Heatmap)")
+    with gr.Tab("Diagnostic Inference"):
+        # Upload State View
+        with gr.Column(elem_classes="upload-zone fade-in", visible=True) as upload_container:
+            gr.Markdown("### Upload Scan")
+            input_img = gr.Image(type="pil", label="", elem_classes="upload-zone")
+            target_viz = gr.Dropdown(
+                choices=CLASSES, 
+                value="Pneumonia", 
+                label="Target Visualization Class"
+            )
+            predict_btn = gr.Button("Diagnose", variant="primary")
+        
+        # Results State View
+        with gr.Column(visible=False, elem_classes="fade-in") as results_container:
+            with gr.Row():
+                with gr.Column(scale=1):
+                    output_heatmap = gr.Image(label="Grad-CAM Analysis")
                 
+                with gr.Column(scale=1):
+                    output_markdown = gr.Markdown()
+                    reset_btn = gr.Button("Analyze Another Scan")
+
         predict_btn.click(
             fn=predict_image,
             inputs=[input_img, target_viz],
-            outputs=[output_label, output_heatmap]
+            outputs=[output_markdown, output_heatmap, upload_container, results_container]
         )
         
-    with gr.Tab("Model Training & Optimization"):
+        reset_btn.click(
+            fn=reset_view,
+            inputs=[],
+            outputs=[upload_container, results_container, input_img, output_heatmap]
+        )
+        
+    with gr.Tab("Model Training"):
         gr.Markdown(
             """
-            ### ⚙️ Train/Retrain the Classifier
-            By default, a fast-mode configuration is provided to quickly get the UI up and running. Use this panel to train the model on a larger subset of images to reach higher clinical accuracy.
+            ### Train Classifier
+            Adjust parameters to fine-tune the model on your dataset.
             """
         )
         with gr.Row():
             with gr.Column(scale=1):
                 num_samples_slider = gr.Slider(
                     minimum=100, maximum=10000, value=1000, step=100, 
-                    label="Training Dataset Size (Random Subset)"
+                    label="Dataset Size"
                 )
                 epochs_slider = gr.Slider(
                     minimum=1, maximum=20, value=5, step=1, 
@@ -436,15 +528,15 @@ with gr.Blocks() as demo:
                 lr_input = gr.Number(
                     value=0.0001, label="Learning Rate", precision=6
                 )
-                train_btn = gr.Button("Start Training Run", variant="secondary")
-                status_box = gr.Textbox(value=training_status, label="Current Training Status", interactive=False)
+                train_btn = gr.Button("Start Training")
+                status_box = gr.Textbox(value=training_status, label="Status", interactive=False)
                 
             with gr.Column(scale=2):
                 log_box = gr.Textbox(
-                    value="", label="Training Terminal Logs", 
+                    value="", label="Terminal Logs", 
                     interactive=False, lines=15, max_lines=30
                 )
-                refresh_btn = gr.Button("Refresh Training Logs")
+                refresh_btn = gr.Button("Refresh Logs")
                 
         train_btn.click(
             fn=start_training,
@@ -467,5 +559,5 @@ with gr.Blocks() as demo:
         )
 
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1", share=False, theme=gr.themes.Soft())
+    demo.launch(server_name="127.0.0.1", share=False)
 
