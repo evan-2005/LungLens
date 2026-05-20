@@ -513,31 +513,31 @@ with gr.Blocks(css=apple_css, title="LungLens") as demo:
                 """
             )
             with gr.Row():
-            with gr.Column(scale=1):
-                num_samples_slider = gr.Slider(
-                    minimum=100, maximum=10000, value=1000, step=100, 
-                    label="Dataset Size"
-                )
-                epochs_slider = gr.Slider(
-                    minimum=1, maximum=20, value=5, step=1, 
-                    label="Epochs"
-                )
-                batch_size_slider = gr.Slider(
-                    minimum=8, maximum=64, value=16, step=8, 
-                    label="Batch Size"
-                )
-                lr_input = gr.Number(
-                    value=0.0001, label="Learning Rate", precision=6
-                )
-                train_btn = gr.Button("Start Training")
-                status_box = gr.Textbox(value=training_status, label="Status", interactive=False)
-                
-            with gr.Column(scale=2):
-                log_box = gr.Textbox(
-                    value="", label="Terminal Logs", 
-                    interactive=False, lines=15, max_lines=30
-                )
-                refresh_btn = gr.Button("Refresh Logs")
+                with gr.Column(scale=1):
+                    num_samples_slider = gr.Slider(
+                        minimum=100, maximum=10000, value=1000, step=100, 
+                        label="Dataset Size"
+                    )
+                    epochs_slider = gr.Slider(
+                        minimum=1, maximum=20, value=5, step=1, 
+                        label="Epochs"
+                    )
+                    batch_size_slider = gr.Slider(
+                        minimum=8, maximum=64, value=16, step=8, 
+                        label="Batch Size"
+                    )
+                    lr_input = gr.Number(
+                        value=0.0001, label="Learning Rate", precision=6
+                    )
+                    train_btn = gr.Button("Start Training")
+                    status_box = gr.Textbox(value=training_status, label="Status", interactive=False)
+                    
+                with gr.Column(scale=2):
+                    log_box = gr.Textbox(
+                        value="", label="Terminal Logs", 
+                        interactive=False, lines=15, max_lines=30
+                    )
+                    refresh_btn = gr.Button("Refresh Logs")
                 
         train_btn.click(
             fn=start_training,
