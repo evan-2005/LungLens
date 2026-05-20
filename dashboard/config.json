@@ -1,0 +1,13 @@
+{
+    "FhirServerUrl": "https://chestist-fhir-api.azurehealthcareapis.com",
+    "SmartOnFhirApps": [
+        {
+            "DisplayName": "Growth Chart",
+            "LaunchUrl": "https://zeckcg7jlal6q-growth-chart-app.azurewebsites.net/launch.html"
+        },
+        {
+            "DisplayName": "Chestist",
+            "LaunchUrl": "https://zeckcg7jlal6q-chestist-app.azurewebsites.net"
+        }
+    ]
+}
