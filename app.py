@@ -406,29 +406,29 @@ apple_css = """
     --color-accent: #0071E3 !important;
     --color-accent-soft: rgba(0, 113, 227, 0.2) !important;
 }
-body, .gradio-container {
+html, body, .gradio-container {
     background-color: #F5F5F7 !important;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
-.dark body, .dark .gradio-container {
+.dark html, .dark body, .dark .gradio-container {
     background-color: #1C1C1E !important;
 }
 .gradio-container {
     max-width: 1200px !important;
 }
 .custom-panel {
-    background: rgba(255, 255, 255, 0.7) !important;
-    backdrop-filter: blur(20px) !important;
-    -webkit-backdrop-filter: blur(20px) !important;
+    background: #FFFFFF !important;
     border: 1px solid rgba(0, 0, 0, 0.05) !important;
     border-radius: 20px !important;
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.02) !important;
     padding: 24px !important;
     margin-bottom: 16px !important;
-    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 .dark .custom-panel {
-    background: rgba(40, 40, 42, 0.7) !important;
+    background: #2C2C2E !important;
     border: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
 .centered-card {
