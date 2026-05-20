@@ -417,7 +417,10 @@ html, body, .gradio-container {
     background-color: #1C1C1E !important;
 }
 .gradio-container {
-    max-width: 1200px !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 24px !important;
+    box-sizing: border-box !important;
 }
 .custom-panel {
     background: #FFFFFF !important;
@@ -502,37 +505,39 @@ with gr.Blocks(title="LungLens") as demo:
     )
     
     with gr.Tab("Diagnostic Inference"):
-        # Upload State View
-        with gr.Column(elem_classes="upload-zone fade-in custom-panel centered-card", visible=True) as upload_container:
-            gr.Markdown("### Upload Scan")
-            input_img = gr.Image(type="pil", label="", elem_classes="upload-zone")
-            target_viz = gr.Dropdown(
-                choices=CLASSES, 
-                value="Pneumonia", 
-                label="Target Visualization Class"
-            )
-            predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
+        # Upload State View (centered using spacers)
+        with gr.Row(visible=True) as upload_view:
+            gr.Column(scale=1)
+            with gr.Column(scale=2, elem_classes="upload-zone fade-in custom-panel"):
+                gr.Markdown("### Upload Scan")
+                input_img = gr.Image(type="pil", label="", elem_classes="upload-zone")
+                target_viz = gr.Dropdown(
+                    choices=CLASSES, 
+                    value="Pneumonia", 
+                    label="Target Visualization Class"
+                )
+                predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
+            gr.Column(scale=1)
         
-        # Results State View
-        with gr.Column(visible=False, elem_classes="fade-in custom-panel") as results_container:
-            with gr.Row():
-                with gr.Column(scale=1):
-                    output_heatmap = gr.Image(label="Grad-CAM Analysis")
-                
-                with gr.Column(scale=1):
-                    output_markdown = gr.Markdown()
-                    reset_btn = gr.Button("Analyze Another Scan", elem_classes="primary-btn")
+        # Results State View (split into two columns)
+        with gr.Row(visible=False) as results_view:
+            with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
+                output_heatmap = gr.Image(label="Grad-CAM Analysis")
+            
+            with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
+                output_markdown = gr.Markdown()
+                reset_btn = gr.Button("Analyze Another Scan", elem_classes="primary-btn")
 
         predict_btn.click(
             fn=predict_image,
             inputs=[input_img, target_viz],
-            outputs=[output_markdown, output_heatmap, upload_container, results_container]
+            outputs=[output_markdown, output_heatmap, upload_view, results_view]
         )
         
         reset_btn.click(
             fn=reset_view,
             inputs=[],
-            outputs=[upload_container, results_container, input_img, output_heatmap]
+            outputs=[upload_view, results_view, input_img, output_heatmap]
         )
         
     with gr.Tab("Model Training"):
