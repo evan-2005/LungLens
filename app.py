@@ -339,25 +339,22 @@ def predict_image(image, target_class_name):
         orig_img = np.array(image)
         orig_img = cv2.resize(orig_img, (224, 224))
 
-        input_tensor = transform(image).unsqueeze(0).to(device)
-
-        target_layer = model.cnnmodel.features.denseblock4.denselayer16.conv2
-        grad_cam = GradCAM(model, target_layer)
-
-        input_tensor.requires_grad = True
-        outputs = model(input_tensor)
-        probabilities = torch.nn.functional.softmax(outputs, dim=1)[0].detach().cpu()
+        # --- PASS 1: Clean inference pass to get probabilities (no grad) ---
+        model.eval()
+        with torch.no_grad():
+            infer_tensor = transform(image).unsqueeze(0).to(device)
+            outputs_infer = model(infer_tensor)
+            probabilities = torch.nn.functional.softmax(outputs_infer, dim=1)[0].cpu()
 
         top_class_idx = int(torch.argmax(probabilities).item())
         top_class = CLASSES[top_class_idx]
-        top_prob = probabilities[top_class_idx] * 100
-
-        normal_prob = probabilities[0] * 100
+        top_prob      = probabilities[top_class_idx] * 100
+        normal_prob   = probabilities[0] * 100
         pneumonia_prob = probabilities[1] * 100
         tuberculosis_prob = probabilities[2] * 100
-        covid_prob = probabilities[3] * 100
+        covid_prob    = probabilities[3] * 100
 
-        findings_text = f"### Findings\n\nThe model analyzed the chest X-ray and found a **{top_prob:.1f}% probability of {top_class}**.\n\n"
+        findings_text  = f"### Findings\n\nThe model analyzed the chest X-ray and found a **{top_prob:.1f}% probability of {top_class}**.\n\n"
         findings_text += f"- **Normal**: {normal_prob:.1f}%\n"
         findings_text += f"- **Pneumonia**: {pneumonia_prob:.1f}%\n"
         findings_text += f"- **Tuberculosis**: {tuberculosis_prob:.1f}%\n"
@@ -372,18 +369,24 @@ def predict_image(image, target_class_name):
         elif top_class == "Covid-19":
             findings_text += "The scan shows indications consistent with Covid-19. Please refer to the Grad-CAM heatmap to visualize bilateral ground-glass opacities or consolidations."
 
+        # --- PASS 2: Fresh tensor with grad for Grad-CAM backward pass ---
         target_idx = CLASSES.index(target_class_name)
+        target_layer = model.cnnmodel.features.denseblock4.denselayer16.conv2
+        grad_cam = GradCAM(model, target_layer)
 
-        heatmap = grad_cam.generate_heatmap(input_tensor, target_idx)
+        grad_tensor = transform(image).unsqueeze(0).to(device)
+        grad_tensor.requires_grad_(True)
+
+        heatmap = grad_cam.generate_heatmap(grad_tensor, target_idx)
         grad_cam.remove_hooks()
 
+        # Build and return superimposed heatmap as PIL Image (avoids Gradio "processing" spinner bug)
         heatmap_colored = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
         heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
+        superimposed = np.clip(heatmap_colored * 0.4 + orig_img * 0.6, 0, 255).astype(np.uint8)
+        superimposed_pil = Image.fromarray(superimposed)
 
-        superimposed_img = heatmap_colored * 0.4 + orig_img * 0.6
-        superimposed_img = np.clip(superimposed_img, 0, 255).astype(np.uint8)
-
-        return findings_text, superimposed_img, gr.update(visible=False), gr.update(visible=True)
+        return findings_text, superimposed_pil, gr.update(visible=False), gr.update(visible=True)
 
     except Exception as e:
         gr.Warning(f"Diagnosis failed: {str(e)}")
@@ -486,6 +489,16 @@ p, label {
     max-width: 320px !important;
     width: 100% !important;
 }
+/* Disclaimer note styling */
+.disclaimer-note {
+    font-size: 12px !important;
+    color: #86868B !important;
+    text-align: center !important;
+    margin-top: 6px !important;
+    margin-bottom: 0 !important;
+    line-height: 1.5 !important;
+    padding: 0 8px !important;
+}
 footer {
     display: none !important;
 }
@@ -522,6 +535,11 @@ with gr.Blocks(title="LungLens", fill_width=True) as demo:
                         value="Pneumonia",
                         label="Target Visualization Class"
                     )
+
+                gr.HTML(
+                    "<p class='disclaimer-note'>The Grad-CAM heatmap highlights the regions most influential for the selected class, "
+                    "helping clinicians interpret the AI's reasoning. This tool is not a substitute for professional medical diagnosis.</p>"
+                )
 
                 predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
             gr.Column(scale=1)
