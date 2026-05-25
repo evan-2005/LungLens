@@ -1,6 +1,6 @@
 # LungLens
 
-**LungLens** is an advanced, Apple-inspired clinical diagnostic web application designed to classify chest X-rays into four distinct categories: **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**.
+**LungLens** is an advanced, clinical diagnostic web application designed to classify chest X-rays into four distinct categories: **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**.
 
 Powered by a robust **DenseNet-121** deep learning architecture and wrapped in a beautiful, highly polished Gradio interface, LungLens provides both clinical probability metrics and **Grad-CAM visual heatmaps** to ensure the AI's diagnostic reasoning is completely transparent to clinicians.
 
