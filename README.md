@@ -1,15 +1,17 @@
 # LungLens
 
-LungLens is an advanced, Apple-inspired clinical diagnostic web application designed to classify chest X-rays into four distinct categories: Normal, Pneumonia, Tuberculosis, and Covid-19.
-Powered by a robust DenseNet-121 deep learning architecture and wrapped in a beautiful, highly polished Gradio interface, LungLens provides both clinical probability metrics and Grad-CAM visual heatmaps to ensure the AI's diagnostic reasoning is completely transparent to clinicians.
+**LungLens** is an advanced, Apple-inspired clinical diagnostic web application designed to classify chest X-rays into four distinct categories: **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**.
+
+Powered by a robust **DenseNet-121** deep learning architecture and wrapped in a beautiful, highly polished Gradio interface, LungLens provides both clinical probability metrics and **Grad-CAM visual heatmaps** to ensure the AI's diagnostic reasoning is completely transparent to clinicians.
+
 ---
 
 ## 🌟 Key Features
 
 - **Clinical-Grade AI Inference**: Built on a pre-trained PyTorch DenseNet-121 model fine-tuned for thoracic pathology detection.
-- **Grad-CAM Visual Explainability**: Automatically generates a heat map highlighting the exact localized areas of the lungs that the neural network used to determine its diagnosis (e.g., fluid consolidation, focal lesions).
+- **Grad-CAM Visual Explainability**: Automatically generates a heatmap highlighting the exact localised areas of the lungs that the neural network used to determine its diagnosis (e.g., fluid consolidation, focal lesions).
 - **Human-Readable Findings**: Translates complex probabilistic outputs into plain, clinical English sentences.
-- **Sleek Apple-Aesthetic UI**: Features an ultra-minimalist design with frosted glassmorphism, SF Pro typography, smooth animations, and a strict monochrome palette accented by medical blue.
+- **Sleek Apple-Aesthetic UI**: Features an ultra-minimalist design with SF Pro typography, smooth animations, and a strict monochrome palette accented by medical blue.
 - **Built-in Training Dashboard**: A dedicated interface allowing users to natively retrain the neural network on local or downloaded datasets directly from the browser without touching a line of code.
 
 ---
@@ -62,18 +64,18 @@ Open your web browser and navigate to **[http://127.0.0.1:7860](http://127.0.0.1
 ### Diagnostic Inference (Testing)
 1. Navigate to the **Diagnostic Inference** tab.
 2. Drag and drop a chest X-ray image into the upload zone.
-3. Click **Diagnose**. 
-4. The system will slide over to reveal the findings, the probabilities, and the diagnostic heatmap. 
+3. Click **Diagnose**.
+4. The system will reveal the findings, probabilities, and the Grad-CAM diagnostic heatmap.
 
 ### Model Training (Improving Accuracy)
-When you first run the app, it initializes a rapid "fast-mode" model on a tiny subset of images so you don't have to wait to see the UI. To make the model highly accurate:
+When you first run the app, it will prompt you to train a model before inference is available. To train:
 1. Navigate to the **Model Training** tab.
 2. Adjust the **Dataset Size** slider (e.g., 2000+ images) and set **Epochs** to 5 or more.
 3. Click **Start Training**. The terminal logs will update on the right side of the screen.
-4. Once training finishes, the new, highly accurate model is automatically saved as `chest_model_4class.pth` and loaded for inference.
+4. Once training finishes, the new model is automatically saved as `chest_model_4class.pth` and loaded for inference.
 
 ### Adding Custom Datasets
-You can easily train the model on your own X-ray images! 
+You can easily train the model on your own X-ray images!
 1. Place your images inside the `custom_dataset` folder.
 2. Ensure the file names or their parent folder names contain the disease name (`normal`, `pneumonia`, `tuberculosis`, or `covid`).
 3. Click **Start Training** in the dashboard. The script will automatically scan your custom folder and incorporate them into the training pipeline.
