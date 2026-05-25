@@ -478,30 +478,13 @@ p, label {
 .upload-zone .gradio-image:hover, .upload-zone .gradio-image:focus-within {
     border-color: #0071E3 !important;
 }
-/* FIX: Info row alignment — vertically center dropdown and tooltip */
-.viz-controls-row {
-    display: flex !important;
-    align-items: flex-end !important;
-    gap: 8px !important;
+/* Center the Target Visualization Class dropdown */
+.viz-dropdown-row {
+    justify-content: center !important;
 }
-.viz-controls-row .gradio-dropdown {
-    flex: 1 !important;
-}
-.info-tooltip {
-    display: flex !important;
-    align-items: center !important;
-    padding-bottom: 6px !important;
-    font-size: 18px !important;
-    cursor: help !important;
-    flex-shrink: 0 !important;
-}
-/* Disclaimer note styling */
-.disclaimer-note {
-    font-size: 12px !important;
-    color: #86868B !important;
-    margin-top: 6px !important;
-    margin-bottom: 0 !important;
-    line-height: 1.5 !important;
+.viz-dropdown-row .gradio-dropdown {
+    max-width: 320px !important;
+    width: 100% !important;
 }
 footer {
     display: none !important;
@@ -533,22 +516,12 @@ with gr.Blocks(title="LungLens", fill_width=True) as demo:
                 gr.Markdown("### Upload Scan")
                 input_img = gr.Image(type="pil", label="", elem_classes="upload-zone")
 
-                # FIX: Dropdown + tooltip icon in one row, disclaimer on its own line below
-                with gr.Row(elem_classes="viz-controls-row"):
+                with gr.Row(elem_classes="viz-dropdown-row"):
                     target_viz = gr.Dropdown(
                         choices=CLASSES,
                         value="Pneumonia",
                         label="Target Visualization Class"
                     )
-                    gr.HTML(
-                        "<span class='info-tooltip' title='Select a class to generate Grad-CAM heatmap for that disease.'>🛈</span>"
-                    )
-
-                # Disclaimer as a separate full-width element below the row
-                gr.HTML(
-                    "<p class='disclaimer-note'>The Grad-CAM heatmap highlights regions most influential for the selected class, "
-                    "helping clinicians interpret the AI's reasoning.</p>"
-                )
 
                 predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
             gr.Column(scale=1)
