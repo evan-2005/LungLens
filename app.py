@@ -19,8 +19,8 @@ import threading
 import io
 
 # Define classes
-CLASSES = ["Normal", "Pneumonia", "TB"]
-model_path = "chest_model_3class.pth"
+CLASSES = ["Normal", "Pneumonia", "Tuberculosis", "Covid-19"]
+model_path = "chest_model_4class.pth"
 training_status = "Not Training"
 training_logs = []
 model = None
@@ -117,19 +117,20 @@ class GradCAM:
         return cam
 
 def get_dataset_paths():
-    tb_path = kagglehub.dataset_download("tawsifurrahman/tuberculosis-tb-chest-xray-dataset")
+    tuberculosis_path = kagglehub.dataset_download("tawsifurrahman/tuberculosis-tb-chest-xray-dataset")
     pneumonia_path = kagglehub.dataset_download("pcbreviglieri/pneumonia-xray-images")
-    return tb_path, pneumonia_path
+    covid_path = kagglehub.dataset_download("raddar/ricord-covid19-xray-positive-tests")
+    return tuberculosis_path, pneumonia_path, covid_path
 
 def collect_data():
-    tb_base, pneumonia_base = get_dataset_paths()
+    tuberculosis_base, pneumonia_base, covid_base = get_dataset_paths()
     
     image_paths = []
     labels = []
 
-    # TB Dataset
-    tb_files = glob.glob(os.path.join(tb_base, "**", "*.*"), recursive=True)
-    for f in tb_files:
+    # Tuberculosis Dataset
+    tuberculosis_files = glob.glob(os.path.join(tuberculosis_base, "**", "*.*"), recursive=True)
+    for f in tuberculosis_files:
         if not f.lower().endswith(('.png', '.jpg', '.jpeg')): continue
         f_lower = f.lower()
         if 'normal' in f_lower:
@@ -137,7 +138,7 @@ def collect_data():
             labels.append(0) # Normal
         elif 'tuberculosis' in f_lower or 'tb' in f_lower:
             image_paths.append(f)
-            labels.append(2) # TB
+            labels.append(2) # Tuberculosis
 
     # Pneumonia Dataset
     pneumonia_files = glob.glob(os.path.join(pneumonia_base, "**", "*.*"), recursive=True)
@@ -150,6 +151,13 @@ def collect_data():
         elif 'pneumonia' in f_lower:
             image_paths.append(f)
             labels.append(1) # Pneumonia
+
+    # Covid-19 Dataset
+    covid_files = glob.glob(os.path.join(covid_base, "**", "*.*"), recursive=True)
+    for f in covid_files:
+        if not f.lower().endswith(('.png', '.jpg', '.jpeg')): continue
+        image_paths.append(f)
+        labels.append(3) # Covid-19
 
     # Custom Local Dataset
     custom_base = os.path.join(os.path.dirname(__file__), "custom_dataset")
@@ -167,6 +175,9 @@ def collect_data():
             elif 'tb' in f_lower or 'tuberculosis' in f_lower:
                 image_paths.append(f)
                 labels.append(2)
+            elif 'covid' in f_lower:
+                image_paths.append(f)
+                labels.append(3)
 
     # Balance datasets slightly if needed, but for now just shuffle and return
     combined = list(zip(image_paths, labels))
@@ -223,7 +234,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
         
         # Initialize model
         training_logs.append("Initializing CNNModel (DenseNet121 pre-trained)...")
-        model = CNNModel(classCount=3, isTrained=True).to(device)
+        model = CNNModel(classCount=4, isTrained=True).to(device)
         
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -321,7 +332,7 @@ def predict_image(image, target_class_name):
     global model
     if model is None:
         if os.path.exists(model_path):
-            model = CNNModel(classCount=3, isTrained=False)
+            model = CNNModel(classCount=4, isTrained=False)
             model.load_state_dict(torch.load(model_path, map_location=device))
             model.to(device)
             model.eval()
@@ -329,7 +340,12 @@ def predict_image(image, target_class_name):
             raise gr.Error("No trained model found. Please train a model first on the Training tab.")
 
     if image is None:
-        raise gr.Error("Please upload an X-ray image.")
+        raise gr.Error("Please upload a valid X-ray image.")
+    # Check for empty/blank image (all black)
+    if isinstance(image, Image.Image) and image.getbbox() is None:
+        raise gr.Error("Uploaded image appears to be empty. Please select a proper X-ray image.")
+    # Force convert image to RGB (resolves grayscale channel broadcasting errors)
+    image = image.convert("RGB")
 
     # Force convert image to RGB (resolves grayscale channel broadcasting errors)
     image = image.convert("RGB")
@@ -362,19 +378,23 @@ def predict_image(image, target_class_name):
     
     normal_prob = probabilities[0] * 100
     pneumonia_prob = probabilities[1] * 100
-    tb_prob = probabilities[2] * 100
+    tuberculosis_prob = probabilities[2] * 100
+    covid_prob = probabilities[3] * 100
     
     findings_text = f"### Findings\n\nThe model analyzed the chest X-ray and found a **{top_prob:.1f}% probability of {top_class}**.\n\n"
     findings_text += f"- **Normal**: {normal_prob:.1f}%\n"
     findings_text += f"- **Pneumonia**: {pneumonia_prob:.1f}%\n"
-    findings_text += f"- **Tuberculosis (TB)**: {tb_prob:.1f}%\n\n"
+    findings_text += f"- **Tuberculosis**: {tuberculosis_prob:.1f}%\n"
+    findings_text += f"- **Covid-19**: {covid_prob:.1f}%\n\n"
     
     if top_class == "Normal":
-        findings_text += "No significant abnormalities detected in the provided scan. The lungs appear clear."
+         findings_text += "No significant abnormalities detected in the provided scan. The lungs appear clear."
     elif top_class == "Pneumonia":
-        findings_text += "The scan shows indications consistent with Pneumonia. Please refer to the Grad-CAM heatmap to visualize areas of potential consolidation or infection."
-    else:
-        findings_text += "The scan shows indications consistent with Tuberculosis. Please refer to the Grad-CAM heatmap to visualize focal lesions or cavities."
+         findings_text += "The scan shows indications consistent with Pneumonia. Please refer to the Grad-CAM heatmap to visualize areas of potential consolidation or infection."
+    elif top_class == "Tuberculosis":
+         findings_text += "The scan shows indications consistent with Tuberculosis. Please refer to the Grad-CAM heatmap to visualize focal lesions or cavities."
+    elif top_class == "Covid-19":
+         findings_text += "The scan shows indications consistent with Covid-19. Please refer to the Grad-CAM heatmap to visualize bilateral ground-glass opacities or consolidations."
 
     # Get index of target visualization class
     target_idx = CLASSES.index(target_class_name)
@@ -395,7 +415,7 @@ def predict_image(image, target_class_name):
 
 # Initial load if file exists
 if os.path.exists(model_path):
-    model = CNNModel(classCount=3, isTrained=False)
+    model = CNNModel(classCount=4, isTrained=False)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
@@ -496,7 +516,7 @@ footer {
 def reset_view():
     return gr.update(visible=True), gr.update(visible=False), None, None
 
-with gr.Blocks(title="LungLens") as demo:
+with gr.Blocks(title="LungLens", fill_width=True) as demo:
     gr.Markdown(
         """
         # LungLens
@@ -511,19 +531,23 @@ with gr.Blocks(title="LungLens") as demo:
             with gr.Column(scale=2, elem_classes="upload-zone fade-in custom-panel"):
                 gr.Markdown("### Upload Scan")
                 input_img = gr.Image(type="pil", label="", elem_classes="upload-zone")
-                target_viz = gr.Dropdown(
-                    choices=CLASSES, 
-                    value="Pneumonia", 
-                    label="Target Visualization Class"
-                )
+                # Target class dropdown with info tooltip
+                with gr.Row():
+                    target_viz = gr.Dropdown(
+                        choices=CLASSES,
+                        value="Pneumonia",
+                        label="Target Visualization Class"
+                    )
+                    info_btn = gr.HTML("<span title='Select a class to generate Grad-CAM heatmap for that disease.' style='cursor:help; font-size:14px;'>🛈</span>")
+                    gr.Markdown("**Why select a target class?** The Grad‑CAM heatmap will be generated for the chosen disease, highlighting the regions most influential for that prediction, which helps clinicians interpret the AI's reasoning.")
                 predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
             gr.Column(scale=1)
-        
+
         # Results State View (split into two columns)
         with gr.Row(visible=False) as results_view:
             with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
                 output_heatmap = gr.Image(label="Grad-CAM Analysis")
-            
+
             with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
                 output_markdown = gr.Markdown()
                 reset_btn = gr.Button("Analyze Another Scan", elem_classes="primary-btn")
@@ -533,7 +557,7 @@ with gr.Blocks(title="LungLens") as demo:
             inputs=[input_img, target_viz],
             outputs=[output_markdown, output_heatmap, upload_view, results_view]
         )
-        
+
         reset_btn.click(
             fn=reset_view,
             inputs=[],
@@ -587,13 +611,13 @@ with gr.Blocks(title="LungLens") as demo:
             outputs=[log_box, status_box]
         )
         
-        # Auto refresh helper in Gradio 6.0+ using gr.Timer
-        timer = gr.Timer(value=3)
-        timer.tick(
-            fn=get_training_logs,
-            inputs=[],
-            outputs=[log_box, status_box]
-        )
+# Auto refresh timer removed to prevent loading spinner issues.
+# timer = gr.Timer(value=3)
+# timer.tick(
+#     fn=get_training_logs,
+#     inputs=[],
+#     outputs=[log_box, status_box]
+# )
 
 if __name__ == "__main__":
     demo.launch(server_name="127.0.0.1", share=False, css=apple_css)

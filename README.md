@@ -1,6 +1,6 @@
 # LungLens (formerly Chestist)
 
-**LungLens** is an advanced, Apple-inspired clinical diagnostic web application designed to classify chest X-rays into three distinct categories: **Normal**, **Pneumonia**, and **Tuberculosis (TB)**. 
+**LungLens** is an advanced, Apple-inspired clinical diagnostic web application designed to classify chest X-rays into four distinct categories: **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**. 
 
 Powered by a robust **DenseNet-121** deep learning architecture and wrapped in a beautiful, highly polished Gradio interface, LungLens provides both clinical probability metrics and **Grad-CAM visual heatmaps** to ensure the AI's diagnostic reasoning is completely transparent to clinicians.
 
@@ -20,12 +20,15 @@ Powered by a robust **DenseNet-121** deep learning architecture and wrapped in a
 
 LungLens uses a combination of high-quality, open-source medical datasets pulled automatically via KaggleHub during training:
 
-1. **Tuberculosis (TB) Chest X-ray Database**
+1. **Tuberculosis Chest X-ray Database**
    - *Source*: [tawsifurrahman/tuberculosis-tb-chest-xray-dataset](https://www.kaggle.com/datasets/tawsifurrahman/tuberculosis-tb-chest-xray-dataset)
-   - *Contents*: Confirmed TB positive scans and normal healthy scans.
+   - *Contents*: Confirmed Tuberculosis positive scans and normal healthy scans.
 2. **Pneumonia X-Ray Images**
    - *Source*: [pcbreviglieri/pneumonia-xray-images](https://www.kaggle.com/datasets/pcbreviglieri/pneumonia-xray-images)
    - *Contents*: Thousands of pediatric and adult scans exhibiting viral and bacterial pneumonia alongside normal lungs.
+3. **COVID-19 Chest X-ray Positive Tests**
+   - *Source*: [raddar/ricord-covid19-xray-positive-tests](https://www.kaggle.com/datasets/raddar/ricord-covid19-xray-positive-tests)
+   - *Contents*: Confirmed positive COVID-19 chest scans.
 
 ---
 
@@ -69,10 +72,10 @@ When you first run the app, it initializes a rapid "fast-mode" model on a tiny s
 1. Navigate to the **Model Training** tab.
 2. Adjust the **Dataset Size** slider (e.g., 2000+ images) and set **Epochs** to 5 or more.
 3. Click **Start Training**. The terminal logs will update on the right side of the screen.
-4. Once training finishes, the new, highly accurate model is automatically saved as `chest_model_3class.pth` and loaded for inference.
+4. Once training finishes, the new, highly accurate model is automatically saved as `chest_model_4class.pth` and loaded for inference.
 
 ### Adding Custom Datasets
 You can easily train the model on your own X-ray images! 
 1. Place your images inside the `custom_dataset` folder.
-2. Ensure the file names or their parent folder names contain the disease name (`normal`, `pneumonia`, or `tb`/`tuberculosis`).
+2. Ensure the file names or their parent folder names contain the disease name (`normal`, `pneumonia`, `tuberculosis`, or `covid`).
 3. Click **Start Training** in the dashboard. The script will automatically scan your custom folder and incorporate them into the training pipeline.
