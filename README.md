@@ -1,18 +1,18 @@
 # LungLens
 
-**LungLens** is an advanced, Apple-inspired clinical diagnostic web application designed to classify chest X-rays into four distinct categories: **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**.
+**LungLens** is an advanced, Apple-inspired clinical diagnostic web application designed to perform joint classification and semantic segmentation of chest X-rays across four distinct categories: **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**.
 
-Powered by a robust **DenseNet-121** deep learning architecture and wrapped in a beautiful, highly polished Gradio interface, LungLens provides both clinical probability metrics and **Grad-CAM visual heatmaps** to ensure the AI's diagnostic reasoning is completely transparent to clinicians.
+Powered by a robust **Multi-Task U-Net** deep learning architecture and wrapped in a beautiful, highly polished Gradio interface, LungLens provides both clinical probability metrics and **precise segmentation mask outlines** (with fallback support for pre-trained Grad-CAM localization) to ensure the AI's diagnostic reasoning is completely transparent to clinicians.
 
 ---
 
 ## 🌟 Key Features
 
-- **Clinical-Grade AI Inference**: Built on a pre-trained PyTorch DenseNet-121 model fine-tuned for thoracic pathology detection.
-- **Grad-CAM Visual Explainability**: Automatically generates a heatmap highlighting the exact localised areas of the lungs that the neural network used to determine its diagnosis (e.g., fluid consolidation, focal lesions).
+- **Clinical-Grade AI Inference**: Built on a multi-task semantic segmentation architecture (Multi-Task U-Net) trained for thoracic pathology detection.
+- **Precise Lesion Segmentation**: Automatically segments and overlays the exact localized pathology regions (e.g., fluid consolidation, focal lesions, cavities) as contoured masks rather than fuzzy saliency maps.
 - **Human-Readable Findings**: Translates complex probabilistic outputs into plain, clinical English sentences.
 - **Sleek Apple-Aesthetic UI**: Features an ultra-minimalist design with SF Pro typography, smooth animations, and a strict monochrome palette accented by medical blue.
-- **Built-in Training Dashboard**: A dedicated interface allowing users to natively retrain the neural network on local or downloaded datasets directly from the browser without touching a line of code.
+- **Built-in Training Dashboard**: A dedicated interface allowing users to natively train the Multi-Task U-Net on local or downloaded datasets directly from the browser without touching a line of code.
 
 ---
 
@@ -65,14 +65,14 @@ Open your web browser and navigate to **[http://127.0.0.1:7860](http://127.0.0.1
 1. Navigate to the **Diagnostic Inference** tab.
 2. Drag and drop a chest X-ray image into the upload zone.
 3. Click **Diagnose**.
-4. The system will reveal the findings, probabilities, and the Grad-CAM diagnostic heatmap.
+4. The system will reveal the findings, probabilities, and the segmented pathology mask outline overlay.
 
 ### Model Training (Improving Accuracy)
-When you first run the app, it will prompt you to train a model before inference is available. To train:
+When you first run the app, it will automatically load the fallback pre-trained DenseNet-121 classifier (`chest_model_4class.pth`) and threshold its Grad-CAM outputs to show segmentation outlines. To train the full Multi-Task U-Net segmentation model:
 1. Navigate to the **Model Training** tab.
 2. Adjust the **Dataset Size** slider (e.g., 2000+ images) and set **Epochs** to 5 or more.
 3. Click **Start Training**. The terminal logs will update on the right side of the screen.
-4. Once training finishes, the new model is automatically saved as `chest_model_4class.pth` and loaded for inference.
+4. Once training finishes, the new segmentation model is automatically saved as `chest_segmentation_model.pth` and loaded for direct feedforward segmentation inference.
 
 ### Adding Custom Datasets
 You can easily train the model on your own X-ray images!

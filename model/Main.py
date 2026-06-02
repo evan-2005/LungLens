@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 import torch
 from torchvision import transforms
 from PIL import Image
-from sklearn.metrics.ranking import roc_auc_score
+from sklearn.metrics import roc_auc_score
 
 
 # %env TENANT_ID=

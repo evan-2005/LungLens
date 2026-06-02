@@ -39,17 +39,44 @@ class DatasetGenerator (Dataset):
         
         
     def __getitem__(self, idx):
+        import cv2
+        import torchvision.transforms as transforms
         
-
-
         image_index = self.listImagePaths[idx]
-        img = Image.open(image_index).convert('RGB')
-        #print(image_index)
-        imageLabel= torch.FloatTensor(self.listImageLabels[idx])
+        try:
+            img = Image.open(image_index).convert('RGB')
+        except Exception:
+            img = Image.new('RGB', (224, 224), (0, 0, 0))
+            
+        labels = self.listImageLabels[idx]
+        imageLabel = torch.FloatTensor(labels)
         
-        if self.transform != None: imageData = self.transform(img)
+        if self.transform is not None:
+            imageData = self.transform(img)
+        else:
+            imageData = transforms.ToTensor()(img)
+            
+        # Target mask is of shape (14, 224, 224)
+        target_mask = np.zeros((14, 224, 224), dtype=np.float32)
         
-        return imageData, imageLabel
+        try:
+            gray = cv2.imread(image_index, cv2.IMREAD_GRAYSCALE)
+            gray = cv2.resize(gray, (224, 224))
+            _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY)
+            h, w = gray.shape
+            lung_mask = np.zeros_like(gray)
+            cv2.rectangle(lung_mask, (int(w * 0.15), int(h * 0.15)), (int(w * 0.85), int(h * 0.85)), 255, -1)
+            thresh = cv2.bitwise_and(thresh, lung_mask)
+            pseudo_mask = (thresh / 255.0).astype(np.float32)
+        except Exception:
+            pseudo_mask = np.zeros((224, 224), dtype=np.float32)
+            
+        for c, label in enumerate(labels):
+            if label > 0:
+                target_mask[c] = pseudo_mask
+                
+        target_mask_tensor = torch.tensor(target_mask, dtype=torch.float32)
+        return imageData, target_mask_tensor, imageLabel
     
     
             

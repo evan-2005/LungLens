@@ -18,7 +18,28 @@ from CNNModel import CNNModel
 from DatasetGenerator import DatasetGenerator
 from azureml.core import Workspace, Datastore, Dataset
 from azureml.core.authentication import InteractiveLoginAuthentication
-from sklearn.metrics.ranking import roc_auc_score
+from sklearn.metrics import roc_auc_score
+
+class DiceBCELoss(nn.Module):
+    def __init__(self):
+        super(DiceBCELoss, self).__init__()
+
+    def forward(self, inputs, targets, smooth=1.0):
+        inputs_flat = inputs.view(-1)
+        targets_flat = targets.view(-1)
+        
+        intersection = (inputs_flat * targets_flat).sum()                            
+        dice_loss = 1.0 - (2.0 * intersection + smooth) / (inputs_flat.sum() + targets_flat.sum() + smooth)  
+        BCE = nn.functional.binary_cross_entropy(inputs, targets, reduction='mean')
+        
+        return BCE + dice_loss
+
+def dice_coefficient(y_pred, y_true, smooth=1e-6):
+    y_pred_bin = (y_pred > 0.5).float()
+    intersection = (y_pred_bin * y_true).sum(dim=(2, 3))
+    union = y_pred_bin.sum(dim=(2, 3)) + y_true.sum(dim=(2, 3))
+    dice = (2.0 * intersection + smooth) / (union + smooth)
+    return dice.mean().item()
 
 class TrainerTester ():
 
@@ -28,7 +49,6 @@ class TrainerTester ():
         if nnArchitecture == 'CNNModel': model = CNNModel(nnClassCount, nnIsTrained).cuda()        
         model = torch.nn.DataParallel(model).cuda()
         
-   
         #-------------------- SETTINGS: AML WORKSPACE AND DATASTORE
         interactive_auth = InteractiveLoginAuthentication(tenant_id=os.environ['TENANT_ID'])
         ws = Workspace(
@@ -39,24 +59,20 @@ class TrainerTester ():
             )
         datastore = Datastore.get(ws, datastore_name=os.environ['DATASTORE_NAME'])
 
-
-
         #-------------------- SETTINGS: MOUNTING THE DATASET TO MAKE IT AVAILABLE
         chestist_data = Dataset.get_by_name(ws,os.environ['DATASET_NAME_CSV'])
         mountPoint = chestist_data.mount()
         mountPoint.start()
         mountFolder = mountPoint.mount_point
-        files=os.listdir(mountFolder) #Need to generalize for the whole dataset
-       # pathDirData=files
-        csvFilePath= mountFolder #Path for the csv file with the labels
-
+        files=os.listdir(mountFolder)
+        csvFilePath= mountFolder
 
         #-------------------- SETTINGS: DATA TRANSFORMS (IMAGES SETTINGS)
-        normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) #Using the mean and std of Imagenet is a common practice. They are calculated based on millions of images. We can calculate the new mean and std
+        normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         transformList = []
-        transformList.append(transforms.RandomResizedCrop(transCrop)) #randomize size as well
-        transformList.append(transforms.RandomHorizontalFlip()) #we are adding here a random flip so that is not always horizontal
-        transformList.append(transforms.ToTensor()) #This converts to tensor
+        transformList.append(transforms.RandomResizedCrop(transCrop))
+        transformList.append(transforms.RandomHorizontalFlip())
+        transformList.append(transforms.ToTensor())
         transformList.append(normalize)      
         transformSequence=transforms.Compose(transformList)
 
@@ -64,7 +80,6 @@ class TrainerTester ():
         listImagesTrain=[]
         listImagesVal=[]
         listImagesTest=[]
-       
         
         for imagePath in pathFileTrain:
             listImagesTrain.append(os.path.basename(imagePath))
@@ -84,13 +99,12 @@ class TrainerTester ():
         print("dataset")
         print(list(datasetTrain))
         
-        
         #-------------------- SETTINGS: OPTIMIZER & SCHEDULER
         optimizer = optim.Adam (model.parameters(), lr=0.0001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-5)
         scheduler = ReduceLROnPlateau(optimizer, factor = 0.1, patience = 5, mode = 'min')
                 
         #-------------------- SETTINGS: LOSS
-        loss = torch.nn.BCELoss(size_average = True)
+        loss = torch.nn.BCELoss(reduction='mean')
         
         #---- Load checkpoint 
         if checkpoint != None:
@@ -98,23 +112,18 @@ class TrainerTester ():
             model.load_state_dict(modelCheckpoint['state_dict'],strict=False)
             optimizer.load_state_dict(modelCheckpoint['optimizer'])
 
-        
         #---- TRAIN THE NETWORK
-        
-        lossMIN = 100000 #Fixable
+        lossMIN = 100000
         
         for epochID in range (0, trMaxEpoch):
             
             timestampTime = time.strftime("%H%M%S")
             timestampDate = time.strftime("%d%m%Y")
             timestampSTART = timestampDate + '-' + timestampTime
-            print("1")  
-            #print(list(dataLoaderTrain))             
+            print("Starting epoch", epochID + 1)
             TrainerTester.epochTrain (model, dataLoaderTrain, optimizer, scheduler, trMaxEpoch, nnClassCount, loss)
-            #del dataLoaderTrain
-            #torch.cuda.empty_cache()
             lossVal, losstensor = TrainerTester.epochVal (model, dataLoaderVal, optimizer, scheduler, trMaxEpoch, nnClassCount, loss)
-            #del dataLoaderVal
+            
             timestampTime = time.strftime("%H%M%S")
             timestampDate = time.strftime("%d%m%Y")
             timestampEND = timestampDate + '-' + timestampTime
@@ -128,53 +137,51 @@ class TrainerTester ():
             else:
                 print ('Epoch [' + str(epochID + 1) + '] [----] [' + timestampEND + '] loss= ' + str(lossVal))
                 
-                
     #-------------------------------------------------------------------------------- 
        
     def epochTrain (model, dataLoader, optimizer, scheduler, epochMax, classCount, loss):
-        
         model.train()
+        seg_criterion = DiceBCELoss()
       
-        print("Before batchID")
-        for batchID, (input, target) in enumerate (dataLoader):
-            #print(input)
-            print("batchID")
+        print("Training batches...")
+        for batchID, (input, target_mask, target) in enumerate (dataLoader):
             target = target.cuda(non_blocking = True)
+            target_mask = target_mask.cuda(non_blocking = True)
+            input = input.cuda(non_blocking = True)
                 
-            varInput = torch.autograd.Variable(input)
-            varTarget = torch.autograd.Variable(target)         
-            varOutput = model(varInput)
-            
-            lossvalue = loss(varOutput, varTarget)
-                       
             optimizer.zero_grad()
-            lossvalue.backward()
+            class_logits, pred_masks = model(input)
+            
+            loss_class = loss(class_logits, target)
+            loss_seg = seg_criterion(pred_masks, target_mask)
+            total_loss = loss_class + 2.0 * loss_seg
+                       
+            total_loss.backward()
             optimizer.step()
         
-            
     #-------------------------------------------------------------------------------- 
         
     def epochVal (model, dataLoader, optimizer, scheduler, epochMax, classCount, loss):
-        
         with torch.no_grad():
             model.eval()
 
             lossVal = 0
             lossValNorm = 0
-
             losstensorMean = 0
+            seg_criterion = DiceBCELoss()
 
-            for i, (input, target) in enumerate (dataLoader):
-                print("validation")
+            for i, (input, target_mask, target) in enumerate (dataLoader):
                 target = target.cuda(non_blocking=True)
+                target_mask = target_mask.cuda(non_blocking=True)
+                input = input.cuda(non_blocking=True)
 
-                varInput = torch.autograd.Variable(input, volatile=True)
-                varTarget = torch.autograd.Variable(target, volatile=True)    
-                varOutput = model(varInput)
+                class_logits, pred_masks = model(input)
 
-                losstensor = loss(varOutput, varTarget)
+                loss_class = loss(class_logits, target)
+                loss_seg = seg_criterion(pred_masks, target_mask)
+                losstensor = loss_class + 2.0 * loss_seg
+                
                 losstensorMean += losstensor
-
                 lossVal += losstensor.item()
                 lossValNorm += 1
 
@@ -295,17 +302,17 @@ class TrainerTester ():
 
             model.eval()
 
-            for i, (input, target) in enumerate(dataLoaderTest):
+            for i, (input, target_mask, target) in enumerate(dataLoaderTest):
 
                 target = target.cuda()
                 outGT = torch.cat((outGT, target), 0)
 
                 bs, n_crops, c, h, w = input.size()
 
-                varInput = torch.autograd.Variable(input.view(-1, c, h, w).cuda(), volatile=True)
+                varInput = input.view(-1, c, h, w).cuda()
 
-                out = model(varInput)
-                outMean = out.view(bs, n_crops, -1).mean(1)
+                out_class, out_masks = model(varInput)
+                outMean = out_class.view(bs, n_crops, -1).mean(1)
 
                 outPRED = torch.cat((outPRED, outMean.data), 0)
 

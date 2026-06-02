@@ -21,6 +21,7 @@ import io
 # Define classes
 CLASSES = ["Normal", "Pneumonia", "Tuberculosis", "Covid-19"]
 model_path = "chest_model_4class.pth"
+seg_model_path = "chest_segmentation_model.pth"
 training_status = "Not Training"
 training_logs = []
 model = None
@@ -55,6 +56,167 @@ class CNNModel(nn.Module):
 
     def forward(self, x):
         return self.cnnmodel(x)
+
+# Multi-Task U-Net and Segmentation Utilities
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DoubleConv, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    def forward(self, x):
+        return self.conv(x)
+
+class MultiTaskUNet(nn.Module):
+    def __init__(self, in_channels=3, num_classes=4):
+        super(MultiTaskUNet, self).__init__()
+        # Encoder
+        self.inc = DoubleConv(in_channels, 64)
+        self.down1 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(64, 128))
+        self.down2 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(128, 256))
+        self.down3 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(256, 512))
+        
+        # Classification Head (Bottleneck features -> pool -> FC)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier = nn.Linear(512, num_classes)
+        
+        # Decoder
+        self.up1 = nn.ConvTranspose2d(512, 256, 2, stride=2)
+        self.conv_up1 = DoubleConv(512, 256)
+        
+        self.up2 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.conv_up2 = DoubleConv(256, 128)
+        
+        self.up3 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.conv_up3 = DoubleConv(128, 64)
+        
+        self.outc = nn.Conv2d(64, num_classes, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # Encoder
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        
+        # Classification Branch
+        class_features = self.avgpool(x4)
+        class_features = torch.flatten(class_features, 1)
+        class_logits = self.classifier(class_features)
+        
+        # Decoder
+        x_dec = self.up1(x4)
+        x_dec = torch.cat([x_dec, x3], dim=1)
+        x_dec = self.conv_up1(x_dec)
+        
+        x_dec = self.up2(x_dec)
+        x_dec = torch.cat([x_dec, x2], dim=1)
+        x_dec = self.conv_up2(x_dec)
+        
+        x_dec = self.up3(x_dec)
+        x_dec = torch.cat([x_dec, x1], dim=1)
+        x_dec = self.conv_up3(x_dec)
+        
+        logits = self.outc(x_dec)
+        masks = self.sigmoid(logits)
+        
+        return class_logits, masks
+
+class DiceBCELoss(nn.Module):
+    def __init__(self):
+        super(DiceBCELoss, self).__init__()
+
+    def forward(self, inputs, targets, smooth=1.0):
+        inputs_flat = inputs.view(-1)
+        targets_flat = targets.view(-1)
+        
+        intersection = (inputs_flat * targets_flat).sum()                            
+        dice_loss = 1 - (2.0 * intersection + smooth) / (inputs_flat.sum() + targets_flat.sum() + smooth)  
+        BCE = nn.functional.binary_cross_entropy(inputs, targets, reduction='mean')
+        
+        return BCE + dice_loss
+
+def dice_coefficient(y_pred, y_true, smooth=1e-6):
+    y_pred_bin = (y_pred > 0.5).float()
+    intersection = (y_pred_bin * y_true).sum(dim=(2, 3))
+    union = y_pred_bin.sum(dim=(2, 3)) + y_true.sum(dim=(2, 3))
+    dice = (2.0 * intersection + smooth) / (union + smooth)
+    return dice.mean().item()
+
+class SegmentationDataset(Dataset):
+    def __init__(self, image_paths, labels, class_model, device, transform=None):
+        self.image_paths = image_paths
+        self.labels = labels
+        self.class_model = class_model
+        self.device = device
+        self.transform = transform
+        
+        self.cam_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        label = self.labels[idx]
+        
+        try:
+            image = Image.open(img_path).convert("RGB")
+        except Exception as e:
+            image = Image.new("RGB", (224, 224), (0, 0, 0))
+            
+        if self.transform:
+            img_tensor = self.transform(image)
+        else:
+            img_tensor = transforms.ToTensor()(image)
+            
+        target_mask = np.zeros((4, 224, 224), dtype=np.float32)
+        
+        if label > 0:
+            pseudo_mask = None
+            if self.class_model is not None:
+                try:
+                    target_layer = self.class_model.cnnmodel.features.denseblock4.denselayer16.conv2
+                    grad_cam = GradCAM(self.class_model, target_layer)
+                    
+                    cam_img = Image.open(img_path).convert("RGB")
+                    tensor_for_cam = self.cam_transform(cam_img).unsqueeze(0).to(self.device)
+                    tensor_for_cam.requires_grad_(True)
+                    
+                    heatmap = grad_cam.generate_heatmap(tensor_for_cam, label)
+                    grad_cam.remove_hooks()
+                    
+                    pseudo_mask = (heatmap > 0.45).astype(np.float32)
+                except Exception as e:
+                    pseudo_mask = None
+            
+            if pseudo_mask is None:
+                try:
+                    gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                    gray = cv2.resize(gray, (224, 224))
+                    _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY)
+                    h, w = gray.shape
+                    lung_mask = np.zeros_like(gray)
+                    cv2.rectangle(lung_mask, (int(w * 0.15), int(h * 0.15)), (int(w * 0.85), int(h * 0.85)), 255, -1)
+                    thresh = cv2.bitwise_and(thresh, lung_mask)
+                    pseudo_mask = (thresh / 255.0).astype(np.float32)
+                except Exception:
+                    pseudo_mask = np.zeros((224, 224), dtype=np.float32)
+            
+            target_mask[label] = pseudo_mask
+            
+        target_mask_tensor = torch.tensor(target_mask, dtype=torch.float32)
+        return img_tensor, target_mask_tensor, label
 
 # Grad-CAM Implementation
 class GradCAM:
@@ -196,87 +358,126 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
 
-        train_dataset = ChestXRayDataset(train_paths, train_labels, transform=train_transform)
-        val_dataset = ChestXRayDataset(val_paths, val_labels, transform=val_transform)
+        class_model = None
+        if os.path.exists(model_path):
+            try:
+                training_logs.append("Loading pre-trained classifier model for pseudo-mask generation...")
+                class_model = CNNModel(classCount=4, isTrained=False)
+                class_model.load_state_dict(torch.load(model_path, map_location=device))
+                class_model.to(device)
+                class_model.eval()
+            except Exception as e:
+                training_logs.append(f"Warning: Failed to load pre-trained classifier ({str(e)}). Falling back to threshold-based pseudo-masks.")
+        else:
+            training_logs.append("No pre-trained classifier model found. Falling back to threshold-based pseudo-masks.")
+
+        train_dataset = SegmentationDataset(train_paths, train_labels, class_model, device, transform=train_transform)
+        val_dataset = SegmentationDataset(val_paths, val_labels, class_model, device, transform=val_transform)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-        training_logs.append("Initializing CNNModel (DenseNet121 pre-trained)...")
-        model = CNNModel(classCount=4, isTrained=True).to(device)
+        training_logs.append("Initializing MultiTaskUNet...")
+        model = MultiTaskUNet(in_channels=3, num_classes=4).to(device)
 
-        criterion = nn.CrossEntropyLoss()
+        class_criterion = nn.CrossEntropyLoss()
+        seg_criterion = DiceBCELoss()
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
-        best_acc = 0.0
+        best_val_dice = 0.0
 
         for epoch in range(epochs):
             model.train()
             running_loss = 0.0
             correct = 0
             total = 0
+            total_train_dice = 0.0
 
-            for i, (inputs, targets) in enumerate(train_loader):
-                inputs, targets = inputs.to(device), targets.to(device)
+            for i, (inputs, target_masks, target_labels) in enumerate(train_loader):
+                inputs = inputs.to(device)
+                target_masks = target_masks.to(device)
+                target_labels = target_labels.to(device)
+
                 optimizer.zero_grad()
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                class_logits, pred_masks = model(inputs)
+                
+                loss_class = class_criterion(class_logits, target_labels)
+                loss_seg = seg_criterion(pred_masks, target_masks)
+                loss = loss_class + 2.0 * loss_seg
+                
                 loss.backward()
                 optimizer.step()
 
                 running_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                _, predicted = class_logits.max(1)
+                total += target_labels.size(0)
+                correct += predicted.eq(target_labels).sum().item()
+                
+                dice = dice_coefficient(pred_masks, target_masks)
+                total_train_dice += dice
 
             train_loss = running_loss / len(train_loader)
             train_acc = 100.0 * correct / total
+            train_dice = total_train_dice / len(train_loader)
 
             model.eval()
             val_loss = 0.0
             val_correct = 0
             val_total = 0
+            total_val_dice = 0.0
 
             with torch.no_grad():
-                for inputs, targets in val_loader:
-                    inputs, targets = inputs.to(device), targets.to(device)
-                    outputs = model(inputs)
-                    loss = criterion(outputs, targets)
+                for inputs, target_masks, target_labels in val_loader:
+                    inputs = inputs.to(device)
+                    target_masks = target_masks.to(device)
+                    target_labels = target_labels.to(device)
+                    
+                    class_logits, pred_masks = model(inputs)
+                    
+                    loss_class = class_criterion(class_logits, target_labels)
+                    loss_seg = seg_criterion(pred_masks, target_masks)
+                    loss = loss_class + 2.0 * loss_seg
+                    
                     val_loss += loss.item()
-                    _, predicted = outputs.max(1)
-                    val_total += targets.size(0)
-                    val_correct += predicted.eq(targets).sum().item()
+                    _, predicted = class_logits.max(1)
+                    val_total += target_labels.size(0)
+                    val_correct += predicted.eq(target_labels).sum().item()
+                    
+                    dice = dice_coefficient(pred_masks, target_masks)
+                    total_val_dice += dice
 
             epoch_val_loss = val_loss / len(val_loader)
             epoch_val_acc = 100.0 * val_correct / val_total
+            epoch_val_dice = total_val_dice / len(val_loader)
 
-            log_str = f"Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Loss: {epoch_val_loss:.4f} | Val Acc: {epoch_val_acc:.2f}%"
+            log_str = f"Epoch {epoch+1}/{epochs} | Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Train Dice: {train_dice:.4f} | Val Loss: {epoch_val_loss:.4f} | Val Acc: {epoch_val_acc:.2f}% | Val Dice: {epoch_val_dice:.4f}"
             training_logs.append(log_str)
             print(log_str)
 
-            if epoch_val_acc > best_acc:
-                best_acc = epoch_val_acc
-                torch.save(model.state_dict(), model_path)
-                training_logs.append(f"--> Saved best model with validation accuracy: {best_acc:.2f}%")
+            if epoch_val_dice > best_val_dice:
+                best_val_dice = epoch_val_dice
+                torch.save(model.state_dict(), seg_model_path)
+                training_logs.append(f"--> Saved best model with validation Dice: {best_val_dice:.4f}")
 
         training_status = "Training Finished"
-        training_logs.append("Evaluating final model accuracy and metrics...")
+        training_logs.append("Evaluating final segmentation model on validation set...")
 
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        model.eval()
+        if os.path.exists(seg_model_path):
+            model.load_state_dict(torch.load(seg_model_path, map_location=device))
+            model.eval()
 
         all_preds = []
         all_targets = []
         with torch.no_grad():
-            for inputs, targets in val_loader:
+            for inputs, _, target_labels in val_loader:
                 inputs = inputs.to(device)
-                outputs = model(inputs)
-                _, predicted = outputs.max(1)
+                class_logits, _ = model(inputs)
+                _, predicted = class_logits.max(1)
                 all_preds.extend(predicted.cpu().numpy())
-                all_targets.extend(targets.numpy())
+                all_targets.extend(target_labels.numpy())
 
         report = classification_report(all_targets, all_preds, target_names=CLASSES)
-        training_logs.append("\nClassification Report:\n" + report)
+        training_logs.append("\nFinal Model Classification Report:\n" + report)
 
     except Exception as e:
         training_status = "Failed"
@@ -297,34 +498,39 @@ def get_training_logs():
 def predict_image(image, target_class_name):
     global model
 
-    # --- FIX 1: Warn instead of hard error if no model ---
-    if model is None:
-        if os.path.exists(model_path):
-            try:
+    has_seg_model = os.path.exists(seg_model_path)
+    has_class_model = os.path.exists(model_path)
+
+    if not has_seg_model and not has_class_model:
+        gr.Warning("No trained model found. Please train a model first on the Model Training tab.")
+        return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
+
+    if model is None or (has_seg_model and not isinstance(model, MultiTaskUNet)) or (not has_seg_model and isinstance(model, MultiTaskUNet)):
+        try:
+            if has_seg_model:
+                model = MultiTaskUNet(in_channels=3, num_classes=4)
+                model.load_state_dict(torch.load(seg_model_path, map_location=device))
+                model.to(device)
+                model.eval()
+            else:
                 model = CNNModel(classCount=4, isTrained=False)
                 model.load_state_dict(torch.load(model_path, map_location=device))
                 model.to(device)
                 model.eval()
-            except Exception as e:
-                gr.Warning(f"Failed to load model: {str(e)}")
-                return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
-        else:
-            gr.Warning("No trained model found. Please train a model first on the Training tab.")
+        except Exception as e:
+            gr.Warning(f"Failed to load model: {str(e)}")
             return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
 
-    # --- FIX 2: Warn instead of hard error if no image ---
     if image is None:
         gr.Warning("Please upload a valid X-ray image.")
         return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
 
-    # --- FIX 3: Removed duplicate .convert("RGB") call ---
     try:
         image = image.convert("RGB")
     except Exception as e:
         gr.Warning(f"Could not process image: {str(e)}")
         return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
 
-    # Check for blank/empty image
     if image.getbbox() is None:
         gr.Warning("Uploaded image appears to be empty. Please select a proper X-ray image.")
         return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
@@ -339,12 +545,29 @@ def predict_image(image, target_class_name):
         orig_img = np.array(image)
         orig_img = cv2.resize(orig_img, (224, 224))
 
-        # --- PASS 1: Clean inference pass to get probabilities (no grad) ---
-        model.eval()
-        with torch.no_grad():
-            infer_tensor = transform(image).unsqueeze(0).to(device)
-            outputs_infer = model(infer_tensor)
-            probabilities = torch.nn.functional.softmax(outputs_infer, dim=1)[0].cpu()
+        target_idx = CLASSES.index(target_class_name)
+
+        if isinstance(model, MultiTaskUNet):
+            model.eval()
+            with torch.no_grad():
+                infer_tensor = transform(image).unsqueeze(0).to(device)
+                class_logits, pred_masks = model(infer_tensor)
+                probabilities = torch.nn.functional.softmax(class_logits, dim=1)[0].cpu()
+                mask = pred_masks[0, target_idx].cpu().numpy()
+        else:
+            model.eval()
+            with torch.no_grad():
+                infer_tensor = transform(image).unsqueeze(0).to(device)
+                outputs_infer = model(infer_tensor)
+                probabilities = torch.nn.functional.softmax(outputs_infer, dim=1)[0].cpu()
+
+            target_layer = model.cnnmodel.features.denseblock4.denselayer16.conv2
+            grad_cam = GradCAM(model, target_layer)
+            grad_tensor = transform(image).unsqueeze(0).to(device)
+            grad_tensor.requires_grad_(True)
+            heatmap = grad_cam.generate_heatmap(grad_tensor, target_idx)
+            grad_cam.remove_hooks()
+            mask = heatmap
 
         top_class_idx = int(torch.argmax(probabilities).item())
         top_class = CLASSES[top_class_idx]
@@ -354,7 +577,7 @@ def predict_image(image, target_class_name):
         tuberculosis_prob = probabilities[2] * 100
         covid_prob    = probabilities[3] * 100
 
-        findings_text  = f"### Findings\n\nThe model analyzed the chest X-ray and found a **{top_prob:.1f}% probability of {top_class}**.\n\n"
+        findings_text  = f"### Diagnostic Findings\n\nThe model analyzed the chest X-ray and found a **{top_prob:.1f}% probability of {top_class}**.\n\n"
         findings_text += f"- **Normal**: {normal_prob:.1f}%\n"
         findings_text += f"- **Pneumonia**: {pneumonia_prob:.1f}%\n"
         findings_text += f"- **Tuberculosis**: {tuberculosis_prob:.1f}%\n"
@@ -363,45 +586,49 @@ def predict_image(image, target_class_name):
         if top_class == "Normal":
             findings_text += "No significant abnormalities detected in the provided scan. The lungs appear clear."
         elif top_class == "Pneumonia":
-            findings_text += "The scan shows indications consistent with Pneumonia. Please refer to the Grad-CAM heatmap to visualize areas of potential consolidation or infection."
+            findings_text += "The scan shows indications consistent with Pneumonia. Refer to the segmented overlay showing potential zones of fluid consolidation or infection."
         elif top_class == "Tuberculosis":
-            findings_text += "The scan shows indications consistent with Tuberculosis. Please refer to the Grad-CAM heatmap to visualize focal lesions or cavities."
+            findings_text += "The scan shows indications consistent with Tuberculosis. Refer to the segmented overlay showing potential zones of focal lesions or cavities."
         elif top_class == "Covid-19":
-            findings_text += "The scan shows indications consistent with Covid-19. Please refer to the Grad-CAM heatmap to visualize bilateral ground-glass opacities or consolidations."
+            findings_text += "The scan shows indications consistent with Covid-19. Refer to the segmented overlay showing potential bilateral ground-glass opacities."
 
-        # --- PASS 2: Fresh tensor with grad for Grad-CAM backward pass ---
-        target_idx = CLASSES.index(target_class_name)
-        target_layer = model.cnnmodel.features.denseblock4.denselayer16.conv2
-        grad_cam = GradCAM(model, target_layer)
+        binary_mask = (mask > 0.45).astype(np.uint8) * 255
+        superimposed = orig_img.copy()
+        
+        if target_idx > 0 and np.sum(binary_mask) > 0:
+            color = (0, 113, 227) # Medical Blue
+            mask_colored = np.zeros_like(orig_img)
+            mask_colored[mask > 0.45] = color
+            cv2.addWeighted(mask_colored, 0.4, superimposed, 1.0, 0, superimposed)
+            contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(superimposed, contours, -1, color, 2)
 
-        grad_tensor = transform(image).unsqueeze(0).to(device)
-        grad_tensor.requires_grad_(True)
-
-        heatmap = grad_cam.generate_heatmap(grad_tensor, target_idx)
-        grad_cam.remove_hooks()
-
-        # Build and return superimposed heatmap as PIL Image (avoids Gradio "processing" spinner bug)
-        heatmap_colored = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
-        heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
-        superimposed = np.clip(heatmap_colored * 0.4 + orig_img * 0.6, 0, 255).astype(np.uint8)
         superimposed_pil = Image.fromarray(superimposed)
-
         return findings_text, superimposed_pil, gr.update(visible=False), gr.update(visible=True)
 
     except Exception as e:
         gr.Warning(f"Diagnosis failed: {str(e)}")
         return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
 
-
 # Initial load if file exists
-if os.path.exists(model_path):
+if os.path.exists(seg_model_path):
+    try:
+        model = MultiTaskUNet(in_channels=3, num_classes=4)
+        model.load_state_dict(torch.load(seg_model_path, map_location=device))
+        model.to(device)
+        model.eval()
+        print("Successfully loaded trained MultiTaskUNet on startup.")
+    except Exception as e:
+        print(f"Warning: Could not load U-Net model on startup: {e}")
+elif os.path.exists(model_path):
     try:
         model = CNNModel(classCount=4, isTrained=False)
         model.load_state_dict(torch.load(model_path, map_location=device))
         model.to(device)
         model.eval()
+        print("Successfully loaded fallback CNN classifier on startup.")
     except Exception as e:
-        print(f"Warning: Could not load model on startup: {e}")
+        print(f"Warning: Could not load fallback classifier on startup: {e}")
 
 apple_css = """
 :root {
@@ -537,8 +764,8 @@ with gr.Blocks(title="LungLens", fill_width=True) as demo:
                     )
 
                 gr.HTML(
-                    "<p class='disclaimer-note'>The Grad-CAM heatmap highlights the regions most influential for the selected class, "
-                    "helping clinicians interpret the AI's reasoning. This tool is not a substitute for professional medical diagnosis.</p>"
+                    "<p class='disclaimer-note'>The segmentation mask highlights the detected region of interest for the selected class, "
+                    "helping clinicians localize abnormalities. This tool is not a substitute for professional medical diagnosis.</p>"
                 )
 
                 predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
@@ -546,7 +773,7 @@ with gr.Blocks(title="LungLens", fill_width=True) as demo:
 
         with gr.Row(visible=False) as results_view:
             with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
-                output_heatmap = gr.Image(label="Grad-CAM Analysis")
+                output_heatmap = gr.Image(label="Segmented Region of Interest")
 
             with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
                 output_markdown = gr.Markdown()
@@ -568,7 +795,7 @@ with gr.Blocks(title="LungLens", fill_width=True) as demo:
         with gr.Column(elem_classes="custom-panel"):
             gr.Markdown(
                 """
-                ### Train Classifier
+                ### Train Segmentation Model (Multi-Task U-Net)
                 Adjust parameters to fine-tune the model on your dataset.
                 """
             )
