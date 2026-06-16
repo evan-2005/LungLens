@@ -377,8 +377,12 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
                     if (batch_idx + 1) % max(1, len(train_loader) // 5) == 0:
                         print(f"  Train batch {batch_idx+1}/{len(train_loader)}", flush=True)
                 except Exception as e:
+                    import traceback
+                    error_trace = traceback.format_exc()
                     training_logs.append(f"  ERROR in batch {batch_idx+1}: {str(e)}")
-                    print(f"Batch error: {e}", flush=True)
+                    training_logs.append(error_trace)
+                    print(f"Batch error: {e}\n{error_trace}", flush=True)
+                    continue
 
             train_acc  = 100.0 * correct / total if total > 0 else 0
             train_dice = total_dice / max(1, len(train_loader))
