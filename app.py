@@ -38,7 +38,11 @@ class ChestXRayDataset(Dataset):
     def __getitem__(self, idx):
         try:
             image = Image.open(self.image_paths[idx]).convert("RGB")
-        except Exception:
+        except FileNotFoundError:
+            print(f"WARNING: Image not found: {self.image_paths[idx]}")
+            image = Image.new("RGB", (224, 224), (0, 0, 0))
+        except OSError as e:
+            print(f"WARNING: Cannot open image {self.image_paths[idx]}: {e}")
             image = Image.new("RGB", (224, 224), (0, 0, 0))
         label = self.labels[idx]
         if self.transform:
@@ -66,7 +70,11 @@ class SegmentationDataset(Dataset):
 
         try:
             image = Image.open(img_path).convert("RGB")
-        except Exception:
+        except FileNotFoundError:
+            print(f"WARNING: Image not found: {img_path}")
+            image = Image.new("RGB", (224, 224), (0, 0, 0))
+        except OSError as e:
+            print(f"WARNING: Cannot open image {img_path}: {e}")
             image = Image.new("RGB", (224, 224), (0, 0, 0))
 
         if self.transform:
@@ -74,7 +82,6 @@ class SegmentationDataset(Dataset):
         else:
             img_tensor = transforms.ToTensor()(image)
 
-        # Fast threshold-based pseudo-mask (no Grad-CAM per image)
         target_mask = np.zeros((4, 224, 224), dtype=np.float32)
         if label > 0:
             try:
@@ -86,9 +93,12 @@ class SegmentationDataset(Dataset):
                               (int(w * 0.15), int(h * 0.15)),
                               (int(w * 0.85), int(h * 0.85)), 255, -1)
                 thresh = cv2.bitwise_and(thresh, lung_mask)
-                target_mask[label] = (thresh / 255.0).astype(np.float32)
-            except Exception:
-                pass
+                mask_values = (thresh / 255.0).astype(np.float32)
+                target_mask[label] = np.clip(mask_values, 0.0, 1.0)
+            except cv2.error as e:
+                print(f"WARNING: cv2 operation failed for {img_path}: {e}")
+            except Exception as e:
+                print(f"WARNING: Mask generation failed for {img_path}: {e}")
 
         return img_tensor, torch.tensor(target_mask, dtype=torch.float32), label
 
@@ -175,6 +185,17 @@ def dice_coefficient(y_pred, y_true, smooth=1e-6):
 
 # ── Grad-CAM ──────────────────────────────────────────────────────────────────
 
+def get_gradcam_layer(model):
+    """Get the final conv layer from DenseNet for GradCAM."""
+    try:
+        return model.cnnmodel.features.denseblock4.denselayer16.conv2
+    except AttributeError:
+        raise RuntimeError(
+            f"Unsupported model architecture. Expected DenseNet, got {type(model).__name__}. "
+            "Cannot extract GradCAM layer."
+        )
+
+
 class GradCAM:
     def __init__(self, model, target_layer):
         self.model = model
@@ -193,19 +214,23 @@ class GradCAM:
             h.remove()
 
     def generate_heatmap(self, input_tensor, class_idx):
-        self.model.zero_grad()
-        out = self.model(input_tensor)
-        out[0, class_idx].backward(retain_graph=False)
-        # Vectorised — no Python loop over 1024 channels
-        grads = self.gradients.detach().cpu().numpy()[0]   # (C,H,W)
-        feats = self.features.detach().cpu().numpy()[0]    # (C,H,W)
-        weights = grads.mean(axis=(1, 2))
-        cam = (weights[:, None, None] * feats).sum(axis=0)
-        cam = np.maximum(cam, 0)
-        cam = cv2.resize(cam, (224, 224))
-        if cam.max() > 0:
-            cam /= cam.max()
-        return cam
+        try:
+            self.model.zero_grad()
+            out = self.model(input_tensor)
+            if class_idx >= out.shape[1]:
+                raise ValueError(f"Invalid class index {class_idx} for model output shape {out.shape}")
+            out[0, class_idx].backward(retain_graph=False)
+            grads = self.gradients.detach().cpu().numpy()[0]
+            feats = self.features.detach().cpu().numpy()[0]
+            weights = grads.mean(axis=(1, 2))
+            cam = (weights[:, None, None] * feats).sum(axis=0)
+            cam = np.maximum(cam, 0)
+            cam = cv2.resize(cam, (224, 224))
+            if cam.max() > 0:
+                cam /= cam.max()
+            return cam
+        finally:
+            self.remove_hooks()
 
 
 # ── Data collection ───────────────────────────────────────────────────────────
@@ -247,9 +272,12 @@ def collect_data():
             elif 'covid' in fl:     paths.append(f); labels.append(3)
 
     combined = list(zip(paths, labels))
+    if not combined:
+        print("WARNING: No images found in datasets!")
+        return [], []
     random.shuffle(combined)
-    paths[:], labels[:] = zip(*combined)
-    return paths, labels
+    paths, labels = zip(*combined)
+    return list(paths), list(labels)
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
@@ -270,8 +298,19 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
 
         training_logs.append(f"Using {len(image_paths)} images for training/validation split.")
 
+        stratify_labels = None
+        if len(image_paths) >= 10 and len(set(labels)) > 1:
+            try:
+                label_counts = np.bincount(labels)
+                if np.min(label_counts) >= 2:
+                    stratify_labels = labels
+                else:
+                    training_logs.append("WARNING: Class imbalance detected, using random split")
+            except Exception as e:
+                training_logs.append(f"WARNING: Stratification check failed: {e}")
+
         train_paths, val_paths, train_labels, val_labels = train_test_split(
-            image_paths, labels, test_size=0.2, random_state=42, stratify=labels)
+            image_paths, labels, test_size=0.2, random_state=42, stratify=stratify_labels)
 
         training_logs.append(f"Train samples: {len(train_paths)} | Val samples: {len(val_paths)}")
 
@@ -476,21 +515,22 @@ def predict_image(image, target_class_name):
                 probabilities = torch.softmax(cls_logits, 1)[0].cpu()
                 mask = pred_masks[0, target_idx].cpu().numpy()
         else:
-            # Pass 1: clean inference
             with torch.no_grad():
                 t = tf(image).unsqueeze(0).to(device)
                 probabilities = torch.softmax(model(t), 1)[0].cpu()
-            # Pass 2: Grad-CAM
-            target_layer = model.cnnmodel.features.denseblock4.denselayer16.conv2
+            target_layer = get_gradcam_layer(model)
             grad_cam     = GradCAM(model, target_layer)
             grad_t       = tf(image).unsqueeze(0).to(device)
             grad_t.requires_grad_(True)
             mask = grad_cam.generate_heatmap(grad_t, target_idx)
-            grad_cam.remove_hooks()
 
         top_idx  = int(torch.argmax(probabilities))
+        if top_idx < 0 or top_idx >= len(CLASSES):
+            raise ValueError(f"Invalid prediction index {top_idx}, expected 0-{len(CLASSES)-1}")
+        if probabilities.shape[0] != len(CLASSES):
+            raise RuntimeError(f"Probability shape mismatch: {probabilities.shape[0]} vs {len(CLASSES)}")
         top_cls  = CLASSES[top_idx]
-        probs    = [float(probabilities[i] * 100) for i in range(4)]
+        probs    = [float(probabilities[i] * 100) for i in range(len(CLASSES))]
 
         txt  = f"### Diagnostic Findings\n\nThe model found a **{probs[top_idx]:.1f}% probability of {top_cls}**.\n\n"
         txt += f"- **Normal**: {probs[0]:.1f}%\n"
