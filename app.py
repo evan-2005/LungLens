@@ -332,7 +332,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
         train_ds = SegmentationDataset(train_paths, train_labels, transform=train_tf)
         val_ds   = SegmentationDataset(val_paths,   val_labels,   transform=val_tf)
 
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=0, prefetch_factor=2)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=0)
         val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=0)
 
         training_logs.append("Initializing MultiTaskUNet...")
