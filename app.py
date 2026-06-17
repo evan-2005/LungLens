@@ -467,7 +467,7 @@ def predict_image(image, target_class_name):
 
     if not has_seg and not has_class:
         gr.Warning("No trained model found. Please train a model first.")
-        return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
+        return "", None, gr.update(visible=True), gr.update(visible=False)
 
     # Load correct model type if not already loaded
     need_load = (model is None
@@ -486,21 +486,21 @@ def predict_image(image, target_class_name):
             model.eval()
         except Exception as e:
             gr.Warning(f"Failed to load model: {e}")
-            return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
+            return "", None, gr.update(visible=True), gr.update(visible=False)
 
     if image is None:
         gr.Warning("Please upload a valid X-ray image.")
-        return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
+        return "", None, gr.update(visible=True), gr.update(visible=False)
 
     try:
         image = image.convert("RGB")
     except Exception as e:
         gr.Warning(f"Could not process image: {e}")
-        return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
+        return "", None, gr.update(visible=True), gr.update(visible=False)
 
     if image.getbbox() is None:
         gr.Warning("Uploaded image appears to be empty.")
-        return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
+        return "", None, gr.update(visible=True), gr.update(visible=False)
 
     try:
         tf = transforms.Compose([
@@ -563,7 +563,7 @@ def predict_image(image, target_class_name):
 
     except Exception as e:
         gr.Warning(f"Diagnosis failed: {e}")
-        return gr.update(), gr.update(), gr.update(visible=True), gr.update(visible=False)
+        return "", None, gr.update(visible=True), gr.update(visible=False)
 
 
 # ── Startup model load ────────────────────────────────────────────────────────
@@ -606,10 +606,13 @@ html, body, .gradio-container {
 h1,h2,h3,h4,.prose h1,.prose h2,.prose h3,.prose h4,.md h1,.md h2,.md h3,.md h4 {
     font-weight: 700 !important; letter-spacing: -0.015em !important; color: #1D1D1F !important;
 }
+.gradio-markdown h1, .gradio-markdown h2, .gradio-markdown h3, .gradio-markdown h4,
+.gradio-markdown strong { color: #1D1D1F !important; }
 .dark h1,.dark h2,.dark h3,.dark h4,
 .dark .prose h1,.dark .prose h2,.dark .prose h3,.dark .prose h4,
 .dark .md h1,.dark .md h2,.dark .md h3,.dark .md h4 { color: #F5F5F7 !important; }
 p,label,.prose p,.md p,.gradio-markdown p { font-weight: 400 !important; color: #3a3a3c !important; }
+.gradio-markdown li { color: #3a3a3c !important; }
 .dark p,.dark label,.dark .prose p,.dark .md p,.dark .gradio-markdown p { color: #EBEBF5 !important; }
 .dark .gradio-markdown h1,.dark .gradio-markdown h2,.dark .gradio-markdown h3,
 .dark .gradio-markdown h4,.dark .gradio-markdown strong { color: #F5F5F7 !important; }
