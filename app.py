@@ -467,7 +467,7 @@ def predict_image(image, target_class_name):
 
     if not has_seg and not has_class:
         gr.Warning("No trained model found. Please train a model first.")
-        return "", None, gr.update(visible=True), gr.update(visible=False)
+        return "", gr.update(value=None), gr.update(visible=True), gr.update(visible=False)
 
     # Load correct model type if not already loaded
     need_load = (model is None
@@ -486,21 +486,21 @@ def predict_image(image, target_class_name):
             model.eval()
         except Exception as e:
             gr.Warning(f"Failed to load model: {e}")
-            return "", None, gr.update(visible=True), gr.update(visible=False)
+            return "", gr.update(value=None), gr.update(visible=True), gr.update(visible=False)
 
     if image is None:
         gr.Warning("Please upload a valid X-ray image.")
-        return "", None, gr.update(visible=True), gr.update(visible=False)
+        return "", gr.update(value=None), gr.update(visible=True), gr.update(visible=False)
 
     try:
         image = image.convert("RGB")
     except Exception as e:
         gr.Warning(f"Could not process image: {e}")
-        return "", None, gr.update(visible=True), gr.update(visible=False)
+        return "", gr.update(value=None), gr.update(visible=True), gr.update(visible=False)
 
     if image.getbbox() is None:
         gr.Warning("Uploaded image appears to be empty.")
-        return "", None, gr.update(visible=True), gr.update(visible=False)
+        return "", gr.update(value=None), gr.update(visible=True), gr.update(visible=False)
 
     try:
         tf = transforms.Compose([
@@ -559,11 +559,11 @@ def predict_image(image, target_class_name):
             contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(superimposed, contours, -1, (0, 113, 227), 2)
 
-        return txt, Image.fromarray(superimposed), gr.update(visible=False), gr.update(visible=True)
+        return txt, gr.update(value=Image.fromarray(superimposed)), gr.update(visible=False), gr.update(visible=True)
 
     except Exception as e:
         gr.Warning(f"Diagnosis failed: {e}")
-        return "", None, gr.update(visible=True), gr.update(visible=False)
+        return "", gr.update(value=None), gr.update(visible=True), gr.update(visible=False)
 
 
 # ── Startup model load ────────────────────────────────────────────────────────
@@ -597,51 +597,119 @@ html, body, .gradio-container {
 }
 .dark html, .dark body, .dark .gradio-container { background-color: #1C1C1E !important; }
 .gradio-container { max-width: 100% !important; width: 100% !important; padding: 24px !important; box-sizing: border-box !important; }
+
+/* ── Panel card ────────────────────────────────────────────── */
 .custom-panel {
-    background: #FFFFFF !important; border: 1px solid rgba(0,0,0,0.05) !important;
-    border-radius: 20px !important; box-shadow: 0 4px 24px rgba(0,0,0,0.02) !important;
-    padding: 24px !important; margin-bottom: 16px !important;
+    background: #FFFFFF !important;
+    border: 1px solid rgba(0,0,0,0.05) !important;
+    border-radius: 20px !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.02) !important;
+    padding: 24px !important;
+    margin-bottom: 16px !important;
 }
-.dark .custom-panel { background: #2C2C2E !important; border: 1px solid rgba(255,255,255,0.05) !important; }
-h1,h2,h3,h4,.prose h1,.prose h2,.prose h3,.prose h4,.md h1,.md h2,.md h3,.md h4 {
-    font-weight: 700 !important; letter-spacing: -0.015em !important; color: #1D1D1F !important;
+.dark .custom-panel {
+    background: #2C2C2E !important;
+    border: 1px solid rgba(255,255,255,0.05) !important;
 }
-.gradio-markdown h1, .gradio-markdown h2, .gradio-markdown h3, .gradio-markdown h4,
-.gradio-markdown strong { color: #1D1D1F !important; }
-.dark h1,.dark h2,.dark h3,.dark h4,
-.dark .prose h1,.dark .prose h2,.dark .prose h3,.dark .prose h4,
-.dark .md h1,.dark .md h2,.dark .md h3,.dark .md h4 { color: #F5F5F7 !important; }
-p,label,.prose p,.md p,.gradio-markdown p { font-weight: 400 !important; color: #3a3a3c !important; }
-.gradio-markdown li { color: #3a3a3c !important; }
-.dark p,.dark label,.dark .prose p,.dark .md p,.dark .gradio-markdown p { color: #EBEBF5 !important; }
-.dark .gradio-markdown h1,.dark .gradio-markdown h2,.dark .gradio-markdown h3,
-.dark .gradio-markdown h4,.dark .gradio-markdown strong { color: #F5F5F7 !important; }
-.dark .gradio-markdown p,.dark .gradio-markdown li { color: #EBEBF5 !important; }
+
+/* ── Headings — scoped to panels so tab-level headings keep theme colours ── */
+.custom-panel h1, .custom-panel h2, .custom-panel h3, .custom-panel h4,
+.custom-panel .prose h1, .custom-panel .prose h2,
+.custom-panel .prose h3, .custom-panel .prose h4,
+.custom-panel .md h1, .custom-panel .md h2,
+.custom-panel .md h3, .custom-panel .md h4,
+.custom-panel .gradio-markdown h1, .custom-panel .gradio-markdown h2,
+.custom-panel .gradio-markdown h3, .custom-panel .gradio-markdown h4,
+.custom-panel .gradio-markdown strong {
+    font-weight: 700 !important;
+    letter-spacing: -0.015em !important;
+    color: #1D1D1F !important;
+}
+.dark .custom-panel h1, .dark .custom-panel h2,
+.dark .custom-panel h3, .dark .custom-panel h4,
+.dark .custom-panel .gradio-markdown h1, .dark .custom-panel .gradio-markdown h2,
+.dark .custom-panel .gradio-markdown h3, .dark .custom-panel .gradio-markdown h4,
+.dark .custom-panel .gradio-markdown strong {
+    color: #F5F5F7 !important;
+}
+
+/* ── Body text — scoped to panels ─────────────────────────── */
+.custom-panel p, .custom-panel label,
+.custom-panel .prose p, .custom-panel .md p,
+.custom-panel .gradio-markdown p,
+.custom-panel .gradio-markdown li {
+    font-weight: 400 !important;
+    color: #3a3a3c !important;
+}
+.dark .custom-panel p, .dark .custom-panel label,
+.dark .custom-panel .prose p, .dark .custom-panel .md p,
+.dark .custom-panel .gradio-markdown p,
+.dark .custom-panel .gradio-markdown li {
+    color: #EBEBF5 !important;
+}
+
+/* ── Top-level page title & subtitle (outside panels) ─────── */
+.gradio-container > .gradio-markdown h1,
+.gradio-container > .gradio-markdown p {
+    color: #1D1D1F !important;
+}
+.dark .gradio-container > .gradio-markdown h1,
+.dark .gradio-container > .gradio-markdown p {
+    color: #F5F5F7 !important;
+}
+
+/* ── Tab nav ───────────────────────────────────────────────── */
 .tab-nav button { color: #1D1D1F !important; }
 .dark .tab-nav button { color: #F5F5F7 !important; }
+
+/* ── Primary button ───────────────────────────────────────── */
 .primary-btn {
-    border-radius: 9999px !important; background-color: #0071E3 !important;
-    color: white !important; font-weight: 600 !important; border: none !important;
-    padding: 12px 24px !important; box-shadow: none !important;
+    border-radius: 9999px !important;
+    background-color: #0071E3 !important;
+    color: white !important;
+    font-weight: 600 !important;
+    border: none !important;
+    padding: 12px 24px !important;
+    box-shadow: none !important;
     transition: transform 0.2s ease, background-color 0.2s ease !important;
 }
 .primary-btn:hover { background-color: #0077ED !important; transform: scale(1.02) !important; }
+
+/* ── Upload zone ──────────────────────────────────────────── */
 .upload-zone .gradio-image { border: 2px dashed #D2D2D7 !important; border-radius: 20px !important; background: transparent !important; }
 .dark .upload-zone .gradio-image { border-color: #424245 !important; }
 .upload-zone .gradio-image:hover, .upload-zone .gradio-image:focus-within { border-color: #0071E3 !important; }
+
+/* ── Dropdown centring ────────────────────────────────────── */
 .viz-dropdown-row { justify-content: center !important; }
 .viz-dropdown-row .gradio-dropdown { max-width: 320px !important; width: 100% !important; }
+
+/* ── Disclaimer ───────────────────────────────────────────── */
 .disclaimer-note {
     font-size: 12px !important; color: #86868B !important; text-align: center !important;
     margin-top: 6px !important; margin-bottom: 0 !important; line-height: 1.5 !important; padding: 0 8px !important;
 }
+
 footer { display: none !important; }
+
+/* ── Fade-in animation ────────────────────────────────────── */
 .fade-in { animation: fadeIn 0.8s cubic-bezier(0.16,1,0.3,1); }
 @keyframes fadeIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
 """
 
+
+# FIX: reset_view uses gr.update(value=None) for Image components so Gradio
+# always receives a typed update dict — bare None can leave the component in
+# an uninitialised state on the first render cycle, causing the infinite-scan
+# spinner on the very first upload.
 def reset_view():
-    return gr.update(visible=True), gr.update(visible=False), None, None
+    return (
+        gr.update(visible=True),
+        gr.update(visible=False),
+        gr.update(value=None),   # input_img  — was bare None
+        gr.update(value=None),   # output_heatmap — was bare None
+    )
+
 
 with gr.Blocks(title="LungLens", fill_width=True) as demo:
     gr.Markdown("# LungLens\nAdvanced Diagnostic Imaging")
@@ -663,7 +731,7 @@ with gr.Blocks(title="LungLens", fill_width=True) as demo:
 
         with gr.Row(visible=False) as results_view:
             with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
-                output_heatmap = gr.Image(label="Segmented Region of Interest")
+                output_heatmap = gr.Image(label="Segmented Region of Interest", value=None)
             with gr.Column(scale=1, elem_classes="fade-in custom-panel"):
                 output_markdown = gr.Markdown()
                 reset_btn = gr.Button("Analyze Another Scan", elem_classes="primary-btn")
