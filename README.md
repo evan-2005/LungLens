@@ -1,343 +1,292 @@
 # LungLens
 
-**LungLens** is an advanced, Apple-inspired clinical diagnostic web application that performs **joint semantic segmentation and classification** of chest X-rays across four categories: **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**.
+LungLens is a clinical diagnostic web application that performs joint classification and segmentation of chest X-rays across four categories: Normal, Pneumonia, Tuberculosis, and Covid-19.
 
-The core model is a **Multi-Task U-Net** — a lightweight encoder-decoder architecture that simultaneously predicts diagnostic class probabilities *and* generates pixel-level segmentation masks that precisely outline detected pathology regions. The UI runs on [Gradio](https://www.gradio.app/) with a polished Apple-aesthetic design.
+The core model is a Multi-Task U-Net, a lightweight encoder-decoder that predicts diagnostic class probabilities and pixel-level segmentation masks outlining detected pathology in a single forward pass. The interface is built with [Gradio](https://www.gradio.app/) using a restrained, professional clinical theme.
 
----
-
-## 🌟 Key Features
-
-- **Multi-Task U-Net Architecture** — A single forward pass produces both class probabilities and a 4-channel segmentation mask. No post-hoc saliency hacks.
-- **Precise Lesion Segmentation** — Pathology regions (ground-glass opacities, consolidations, cavities) are overlaid as sharp, contoured Medical Blue masks directly on the scan.
-- **Weakly-Supervised Training** — Requires **no pixel-level annotations**. Pseudo-masks are generated automatically from a pre-trained Grad-CAM classifier, or fall back to intensity-based thresholding.
-- **Smart Fallback** — If a U-Net model hasn't been trained yet, the app automatically loads the legacy DenseNet-121 classifier and converts its Grad-CAM activation into a thresholded segmentation overlay so the app is usable immediately.
-- **Built-in Training Dashboard** — Fine-tune the U-Net on Kaggle datasets entirely from the browser — no terminal required.
-- **Human-Readable Findings** — Clinical-language summaries are generated alongside per-class probability scores.
-- **Apple-Aesthetic UI** — SF Pro typography, glassmorphism panels, fade-in animations, and a strict monochrome + Medical Blue palette.
+> Research and educational tool only. Not a certified medical device. See the Disclaimer at the end.
 
 ---
 
-## 🏗️ Model Architecture
+## Key Features
 
-```
-Input (3×224×224)
-       │
-  ┌────▼────┐
-  │ Encoder │  DoubleConv × 4  (64 → 128 → 256 → 512 channels)
-  └────┬────┘  MaxPool2d between each block
-       │
-  ┌────▼──────────────────────────────┐
-  │ Bottleneck (512 channels)         │
-  │  ├─ AdaptiveAvgPool → Linear(512,4) ──► Class Logits (4)
-  │  └─ ConvTranspose2d × 3 + skip connections
-  └───────────────────────────────────┘
-       │
-  ┌────▼────┐
-  │ Decoder │  Upsample 28→56→112→224, skip connections from encoder
-  └────┬────┘
-       │
-  Conv2d(64, 4, 1×1) → Sigmoid
-       │
-  Segmentation Masks (4×224×224)
-```
-
-**Loss function:**
-```
-Total Loss = CrossEntropyLoss(class) + 2.0 × DiceBCELoss(mask)
-```
-`DiceBCELoss = BCE(pred, target) + DiceLoss(pred, target)`
-
-**Saved as:** `chest_segmentation_model.pth`
+- **Multi-Task U-Net.** One forward pass produces both class probabilities and a 4-channel segmentation mask. No post-hoc saliency hacks are required.
+- **Lesion segmentation overlay.** Predicted pathology regions are drawn on the scan as a translucent fill plus a contour outline in clinical blue.
+- **Weakly supervised training.** No pixel-level annotations are needed. Anatomically informed pseudo-masks are generated from each image (CLAHE contrast equalisation, Otsu thresholding, an elliptical lung-field region, and morphological cleanup).
+- **Automatic fallback.** If no U-Net checkpoint exists yet, the app loads a DenseNet-121 classifier and converts its Grad-CAM activation into a thresholded overlay, so the app is usable immediately.
+- **In-browser training dashboard.** Fine-tune the U-Net on Kaggle datasets without using a terminal. Logs and status refresh automatically while a run is in progress.
+- **Readable findings.** A clinical-language summary is shown alongside native per-class confidence bars.
+- **Learning-rate scheduling.** ReduceLROnPlateau lowers the learning rate when validation Dice stops improving.
 
 ---
 
-## 💾 Datasets
+## Model Architecture
 
-Datasets are downloaded automatically via [KaggleHub](https://github.com/Kaggle/kagglehub) on first training. No manual download needed.
+```
+Input (3 x 224 x 224)
+        |
+   [ Encoder ]    DoubleConv x 4   (64 -> 128 -> 256 -> 512 channels)
+        |         MaxPool2d between each block
+        |
+   [ Bottleneck (512 channels) ]
+        |-- AdaptiveAvgPool -> Linear(512, 4) -> class logits (4)
+        |-- ConvTranspose2d x 3 with skip connections
+        |
+   [ Decoder ]    Upsample 28 -> 56 -> 112 -> 224 with encoder skips
+        |
+   Conv2d(64, 4, 1x1) -> Sigmoid
+        |
+   Segmentation masks (4 x 224 x 224)
+```
+
+Loss:
+
+```
+Total Loss = CrossEntropyLoss(class) + 2.0 * DiceBCELoss(mask)
+DiceBCELoss = BCE(pred, target) + DiceLoss(pred, target)
+```
+
+The best checkpoint (highest validation Dice) is saved as `chest_segmentation_model.pth`.
+
+---
+
+## Datasets
+
+Datasets are downloaded automatically via [KaggleHub](https://github.com/Kaggle/kagglehub) on first training. No manual download is required. Labels are inferred from file and folder names, so no CSV is needed.
 
 | # | Dataset | Kaggle Source | Labels Used |
-|---|---------|--------------|-------------|
+|---|---------|---------------|-------------|
 | 1 | Tuberculosis Chest X-ray | [tawsifurrahman/tuberculosis-tb-chest-xray-dataset](https://www.kaggle.com/datasets/tawsifurrahman/tuberculosis-tb-chest-xray-dataset) | `normal`, `tuberculosis` |
 | 2 | Pneumonia X-Ray Images | [pcbreviglieri/pneumonia-xray-images](https://www.kaggle.com/datasets/pcbreviglieri/pneumonia-xray-images) | `normal`, `pneumonia` |
 | 3 | COVID-19 Chest X-ray Positive Tests | [raddar/ricord-covid19-xray-positive-tests](https://www.kaggle.com/datasets/raddar/ricord-covid19-xray-positive-tests) | `covid-19` |
 
-> Labels are inferred from file/folder names automatically — no CSV required.
-
 ---
 
-## 🛠️ Setup & Installation
+## Setup and Installation
 
 ### Prerequisites
-- **Python 3.8+** (tested on 3.11)
-- A [Kaggle API key](https://www.kaggle.com/docs/api) configured at `~/.kaggle/kaggle.json`
-- **11+ GB disk space** for datasets (~11K images, ~5 GB)
-- *(Recommended)* NVIDIA GPU with CUDA 11.8+ (training on CPU is very slow, ~30 min per epoch with 1000 images)
 
-### 1. Clone the Repository
+- Python 3.8 or newer (tested on 3.11)
+- A [Kaggle API key](https://www.kaggle.com/docs/api) at `~/.kaggle/kaggle.json` (required only for training)
+- Roughly 11 GB of disk space for datasets (about 11,000 images)
+- Optional but recommended: an NVIDIA GPU with CUDA. Training on CPU is slow.
+
+### 1. Clone the repository
+
 ```bash
 git clone https://github.com/evan-2005/LungLens.git
 cd LungLens
 ```
 
-### 2. Install Dependencies
+### 2. Install dependencies
+
 ```bash
 pip install torch torchvision gradio opencv-python numpy scikit-learn kagglehub pillow matplotlib
 ```
 
-For GPU (CUDA 11.8 example — check [pytorch.org](https://pytorch.org) for your version):
+For a GPU build (CUDA 11.8 example; check [pytorch.org](https://pytorch.org) for your version):
+
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### 3. Launch the App
+### 3. Launch the app
+
 ```bash
 python app.py
 ```
 
-Open **[http://127.0.0.1:7860](http://127.0.0.1:7860)** in your browser.
+Then open [http://127.0.0.1:7860](http://127.0.0.1:7860). To use a different port, set the `PORT` environment variable, for example `PORT=8000 python app.py`.
 
-On first launch, if `chest_segmentation_model.pth` exists it is loaded automatically. Otherwise, the app falls back to `chest_model_4class.pth` (legacy classifier) if present.
+On startup the app loads `chest_segmentation_model.pth` if present, otherwise it falls back to `chest_model_4class.pth`.
 
 ---
 
-## 🚀 How to Use
+## How to Use
 
 ### Diagnostic Inference
-1. Go to the **Diagnostic Inference** tab.
-2. Upload a chest X-ray (PNG, JPG, JPEG).
-3. Select the **Target Visualization Class** — the class whose segmentation mask you want to inspect.
-4. Click **Diagnose**.
-5. Results panel shows:
-   - **Segmented Region of Interest** — the original scan with a Medical Blue overlay + contour outline of the detected pathology region.
-   - **Diagnostic Findings** — top predicted class, per-class probabilities, and a clinical description.
-6. Click **Analyze Another Scan** to reset.
+
+1. Open the Diagnostic Inference tab.
+2. Upload a chest X-ray (PNG, JPG, or JPEG).
+3. Select the Target Visualization Class, the class whose segmentation mask you want to inspect.
+4. Click Diagnose. The results panel shows:
+   - Segmented Region of Interest: the scan with a blue overlay and contour outline of the detected region.
+   - Class Confidence: native probability bars for all four classes.
+   - Diagnostic Findings: the top predicted class and a clinical description.
+5. Click Clear to reset the inputs and outputs.
 
 ### Model Training
-1. Go to the **Model Training** tab.
-2. Adjust the hyperparameters (see guide below).
-3. Click **Start Training** — training runs in a background thread.
-4. Click **Refresh Logs** to poll epoch-by-epoch metrics.
-5. The best model (highest validation Dice score) is saved as `chest_segmentation_model.pth` and loaded automatically when training finishes.
+
+1. Open the Model Training tab.
+2. Adjust the hyperparameters (see the guide below).
+3. Click Start Training. Training runs in a background thread.
+4. Logs and status refresh automatically while the run is active. A manual Refresh Logs button is also available.
+5. The best model by validation Dice is saved as `chest_segmentation_model.pth` and loaded automatically when training finishes.
 
 ---
 
-## 🎯 How to Train Effectively
+## How to Train Effectively
 
-### Understanding the Training Pipeline
+### The training pipeline
 
-Training uses **weakly-supervised pseudo-masks** — no pixel annotations are needed:
+Training is weakly supervised, so no pixel annotations are needed:
 
-1. **Pseudo-Mask Generation**: For each non-normal image, a grayscale intensity threshold (pixels > 140) is applied to the central 70% lung region to create training masks automatically.
-2. **Multi-Task Learning**: Classification loss (Cross-Entropy) + Segmentation loss (Dice-BCE) are weighted 1:2 and optimized jointly.
-3. **Gradient Clipping**: Gradients are clipped at max_norm=1.0 to prevent NaN/Inf loss spikes.
+1. **Pseudo-mask generation.** For each non-normal image, the grayscale scan is contrast-equalised (CLAHE), thresholded with Otsu, restricted to an elliptical lung-field region, and cleaned with morphological opening and closing. This produces an anatomically plausible target for the segmentation head.
+2. **Aligned augmentation.** Only photometric augmentation (brightness and contrast jitter) is applied during training. Geometric transforms are omitted because the pseudo-mask is derived from the original image, so rotating or flipping the input would misalign it with its target.
+3. **Joint optimisation.** Classification loss (Cross-Entropy) and segmentation loss (Dice-BCE) are combined with a 1:2 weighting and optimised together.
+4. **Stability.** Gradients are clipped at `max_norm = 1.0`, NaN and Inf batches are skipped, and ReduceLROnPlateau halves the learning rate when validation Dice plateaus.
 
-> **Note:** The current implementation uses fast intensity-based thresholding. For improved segmentation quality with your own data, consider using a pre-trained classifier's Grad-CAM activation as the pseudo-mask source.
-
----
-
-### Recommended Hyperparameter Settings
+### Recommended hyperparameters
 
 | Parameter | Recommended | Notes |
 |-----------|-------------|-------|
-| **Dataset Size** | **500–1000** for testing | Start small to validate training pipeline. More data = better generalization but slower training. |
-| **Epochs** | **2–5** for testing | Validation Dice typically stabilizes after 3-5 epochs on well-labeled data. |
-| **Batch Size** | **8** (CPU) / **16–32** (GPU) | Smaller batches on CPU due to memory constraints. OOM? Reduce batch size. |
-| **Learning Rate** | **0.0001** (fixed) | Adam optimizer with 1e-4 is stable. Don't change unless you know why. |
+| Dataset Size | 500 to 1000 for testing | Start small to validate the pipeline. More data generalises better but is slower. |
+| Epochs | 2 to 5 for testing | Validation Dice usually stabilises within a few epochs. |
+| Batch Size | 8 on CPU, 16 to 32 on GPU | Reduce if you hit out-of-memory errors. |
+| Learning Rate | 0.0001 | A stable starting point for Adam. The scheduler lowers it automatically. |
 
-### Training Recipes by Hardware
+Hyperparameters are validated before a run starts. Out-of-range values (for example a learning rate of 0 or a negative epoch count) are rejected with a clear message.
 
-**Option 1: Quick Test (CPU, ~5–10 min)**
+### Training recipes by hardware
+
+Quick test (CPU):
+
 ```
 Dataset Size : 500
 Epochs       : 2
 Batch Size   : 8
 Learning Rate: 0.0001
-Expected: Train completes, model saves. Dice ≈ 0.15–0.25 (pseudo-masks are noisy).
 ```
 
-**Option 2: Validation (CPU, ~30 min)**
+Validation (CPU):
+
 ```
 Dataset Size : 1000
 Epochs       : 3
 Batch Size   : 8
 Learning Rate: 0.0001
-Expected: Better convergence. Dice ≈ 0.25–0.35.
 ```
 
-**Option 3: Production (GPU, ~2–4 hours)**
+Production (GPU):
+
 ```
 Dataset Size : 5000
 Epochs       : 10
-Batch Size   : 16–32
+Batch Size   : 16 to 32
 Learning Rate: 0.0001
-Expected: Strong segmentation. Dice ≈ 0.40–0.50 (pseudo-labels limit ceiling).
 ```
 
-### Reading the Training Logs
+Pseudo-labels limit the achievable Dice ceiling, so expect modest segmentation scores even on long runs.
 
-Each epoch prints real-time batch progress:
+### Reading the training logs
+
+Each epoch prints batch progress and a summary line:
+
 ```
 [Epoch 1/2] Training (100 batches)...
   Train batch 20/100
-  Train batch 40/100
-  Train batch 60/100
-  Train batch 80/100
-  Train batch 100/100
+  ...
 [Epoch 1/2] Validation (25 batches)...
   Val batch 5/25
-  Val batch 10/25
-  Val batch 15/25
-  Val batch 20/25
-  Val batch 25/25
-Epoch 1/2 | Train Acc: 72.50% | Train Dice: 0.3812 | Val Acc: 68.75% | Val Dice: 0.3541
+  ...
+Epoch 1/2 | Train Acc: 72.50% | Train Dice: 0.3812 | Val Acc: 68.75% | Val Dice: 0.3541 | LR: 1.00e-04
 --> Saved best model (Val Dice: 0.3541)
 ```
 
 | Metric | Meaning | Target |
 |--------|---------|--------|
-| `Train/Val Acc` | Classification accuracy (4 classes) | > 70% is good |
-| `Train/Val Dice` | Segmentation overlap (0–1 scale) | > 0.30 is reasonable with pseudo-masks |
-| `[ERROR]` | Batch processing failed | Check logs, usually data corruption |
+| Train/Val Acc | Classification accuracy across 4 classes | Above 70 percent is good |
+| Train/Val Dice | Segmentation overlap, 0 to 1 | Above 0.30 is reasonable with pseudo-masks |
+| LR | Current learning rate | Drops when validation Dice plateaus |
 
-> **Important**: The model saves the checkpoint with **highest validation Dice**, not lowest loss. Dice directly measures segmentation quality.
+The checkpoint with the highest validation Dice is saved, not the lowest loss, because Dice directly measures segmentation quality.
 
-### Troubleshooting Training Issues
+### TensorBoard
 
-**Training starts but stops at batch 13+**
-- ✅ **Fixed in latest version** — was due to unpacking error
-- If you still see "too many values to unpack", update to latest app.py
+Training writes scalars (loss, accuracy, Dice, and learning rate) to `runs/`. View them with:
 
-**OOM (Out of Memory) error**
-- Reduce `Batch Size` from 8 to 4
-- Reduce `Dataset Size` to 500
-- Close other applications
+```bash
+tensorboard --logdir runs
+```
 
-**Training very slow (>1 min per batch)**
-- You're on CPU. Use GPU for practical training: `pip install torch --index-url https://download.pytorch.org/whl/cu118`
-- Or reduce `Batch Size` and `Dataset Size`
+### Troubleshooting
 
-**Model not improving (Dice stuck at ~0.15)**
-- Pseudo-masks from intensity thresholding are noisy. This is expected.
-- Use 2000+ images and 5+ epochs to see improvement
-- Consider providing better pseudo-mask labels
+**Out-of-memory error.** Reduce Batch Size, reduce Dataset Size, and close other applications.
 
-**"No images found" error**
-- Check Kaggle API key is configured: `cat ~/.kaggle/kaggle.json`
-- Check internet connection (datasets download on first run)
-- Delete `~/.cache/kagglehub` and retry if download corrupted
+**Very slow training.** You are likely on CPU. Install a CUDA build of PyTorch, or reduce Batch Size and Dataset Size.
+
+**Dice stuck low.** Pseudo-masks are inherently noisy. Use more images and more epochs to improve.
+
+**No images found.** Confirm the Kaggle key at `~/.kaggle/kaggle.json`, check your internet connection, and clear `~/.cache/kagglehub` if a download was interrupted.
 
 ---
 
-### Adding Your Own X-rays
+## Adding Your Own X-rays
 
-Drop images into the `custom_dataset/` folder. Name files or parent folders to match disease labels:
+Drop images into a `custom_dataset/` folder. Name files or parent folders to match the disease labels:
 
 ```
 custom_dataset/
-├── normal_scan_001.jpg
-├── pneumonia/
-│   ├── case_a.png
-│   └── case_b.png
-├── tb_positive_01.jpg
-└── covid_scan.jpg
+  normal_scan_001.jpg
+  pneumonia/
+    case_a.png
+    case_b.png
+  tb_positive_01.jpg
+  covid_scan.jpg
 ```
 
-Recognised keywords in filenames/folders: `normal`, `pneumonia`, `tuberculosis`, `tb`, `covid`
-
-Then click **Start Training** — the custom images are merged automatically into the training split.
+Recognised keywords in file and folder names: `normal`, `pneumonia`, `tuberculosis`, `tb`, `covid`. The custom images are merged automatically into the training split.
 
 ---
 
-## 🔧 System Diagnostics
+## System Diagnostics
 
-Before training, verify the system is working:
+Before training, you can verify the system with:
 
 ```bash
 python debug_training.py
 ```
 
-This tests:
-- ✓ Model forward pass (U-Net architecture)
-- ✓ Loss computation (no NaN/Inf)
-- ✓ Dice coefficient calculation
-- ✓ Dataset loading and batching
-- ✓ Full validation loop
-
-**Expected output:**
-```
-============================================================
-✓ PASS: Model forward pass
-✓ PASS: Loss computation
-✓ PASS: Dice coefficient
-✓ PASS: Data loading
-✓ PASS: Validation loop
-```
-
-If any test fails, check the error message — it will tell you what to fix.
+This checks the model forward pass, loss computation, Dice calculation, dataset loading, and the validation loop, then reports a pass or fail for each.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 LungLens/
-├── app.py                           # Main Gradio app — model, training, inference
-├── debug_training.py                # System diagnostics script
-├── chest_model_4class.pth           # Legacy DenseNet-121 classifier (fallback)
-├── chest_segmentation_model.pth     # Multi-Task U-Net (created after training)
-├── custom_dataset/                  # Drop your own X-rays here
-├── test_gradcam.py                  # Quick inference smoke test
-├── COMPREHENSIVE_BUG_REPORT.md      # Detailed system audit
-├── FIXES_APPLIED.md                 # Summary of bug fixes
-├── DEBUG_FIXES.md                   # Training hang solutions
-├── model/
-│   ├── CNNModel.py                  # Multi-Task U-Net definition (standalone)
-│   ├── DatasetGenerator.py          # Dataset with pseudo-mask generation
-│   ├── TrainerTester.py             # Training/eval loops with DiceBCE loss
-│   └── Main.py                      # Azure ML training entry point
-├── data/
-│   └── batch_download_zips.py
-└── README.md
+  app.py                        Main Gradio app: model, training, inference, UI
+  debug_training.py             System diagnostics script
+  test_gradcam.py               Quick inference smoke test
+  chest_model_4class.pth        DenseNet-121 classifier (fallback)
+  chest_segmentation_model.pth  Multi-Task U-Net (loaded if present)
+  custom_dataset/               Optional: drop your own X-rays here
+  model/
+    CNNModel.py                 Standalone Multi-Task U-Net definition
+    DatasetGenerator.py         Dataset with pseudo-mask generation
+    TrainerTester.py            Training and evaluation loops
+    Main.py                     Azure ML training entry point
+  data/
+    batch_download_zips.py
+  README.md
 ```
 
-### Key Classes in `app.py`
+### Key components in `app.py`
 
-| Class / Function | Purpose |
-|-----------------|---------|
-| `MultiTaskUNet` | Encoder-decoder model with classification head. Outputs (class logits, segmentation mask). |
-| `DoubleConv` | Double convolution block with BatchNorm and ReLU |
-| `DiceBCELoss` | Combined Dice Loss + Binary Cross Entropy for segmentation |
-| `dice_coefficient` | Validates segmentation quality (0–1 scale) |
-| `SegmentationDataset` | Returns (image, pseudo_mask, label). Generates masks on-the-fly. |
-| `GradCAM` | Extracts attention heatmaps from DenseNet (inference only) |
-| `predict_image` | Inference function. Runs U-Net or fallback, renders overlay. |
-| `run_training_thread` | Background thread that trains U-Net with per-batch logging |
-
----
-
-## 📋 Recent Fixes (v1.1)
-
-**8 critical bugs fixed:**
-- ✅ Specific exception handlers (FileNotFoundError, OSError instead of bare Exception)
-- ✅ Type consistency in dataset (lists instead of tuples)
-- ✅ Empty dataset handling
-- ✅ Array division bounds checking (clips masks to [0, 1])
-- ✅ Stratification validation (prevents crash on small datasets)
-- ✅ GradCAM memory leak (try-finally cleanup)
-- ✅ Dynamic layer extraction (no hardcoded architecture paths)
-- ✅ Bounds checking on prediction indices
-
-**Training stability improvements:**
-- ✅ Gradient clipping (prevents NaN/Inf loss)
-- ✅ Per-batch error handling with detailed traceback logging
-- ✅ Batch-level progress tracking (updates every ~20% of batches)
-- ✅ DataLoader optimization (prefetch when num_workers > 0)
-
-See `FIXES_APPLIED.md` for implementation details.
+| Class or function | Purpose |
+|-------------------|---------|
+| `MultiTaskUNet` | Encoder-decoder with a classification head. Returns (class logits, segmentation mask). |
+| `DoubleConv` | Double convolution block with BatchNorm and ReLU. |
+| `DiceBCELoss` | Combined Dice and Binary Cross-Entropy loss for segmentation. |
+| `dice_coefficient` | Measures segmentation overlap, 0 to 1. |
+| `generate_pseudo_mask` | Builds an anatomically informed pseudo-mask from a grayscale scan. |
+| `SegmentationDataset` | Returns (image, pseudo-mask, label) with masks generated on the fly. |
+| `GradCAM` | Extracts attention heatmaps from DenseNet for the fallback path. |
+| `predict_image` | Inference: runs the U-Net or fallback and renders the overlay. |
+| `run_training_thread` | Background training loop with per-batch logging. |
 
 ---
 
-## ⚠️ Disclaimer
+## Disclaimer
 
-LungLens is a **research and educational tool**. It is not a certified medical device and must not be used as a substitute for professional clinical diagnosis. Always consult a qualified radiologist or physician for medical decisions.
+LungLens is a research and educational tool. It is not a certified medical device and must not be used as a substitute for professional clinical diagnosis. Always consult a qualified radiologist or physician for medical decisions.
