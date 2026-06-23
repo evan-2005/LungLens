@@ -862,6 +862,43 @@ footer { display: none !important; }
 /* Fade-in animation */
 .fade-in { animation: fadeIn 0.4s ease both; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ----- Mobile / responsive ----- */
+@media (max-width: 768px) {
+    /* Tighter page gutters on small screens */
+    .gradio-container { padding: 12px 14px 32px !important; }
+
+    /* Stack any side-by-side Rows into a single column */
+    .gradio-container .row,
+    .gradio-container div[class*="row"] { flex-direction: column !important; flex-wrap: wrap !important; }
+    .gradio-container .column,
+    .gradio-container div[class*="column"] { min-width: 100% !important; }
+
+    /* Slimmer card padding so content isn't cramped */
+    .custom-panel { padding: 16px !important; }
+
+    /* Header wraps; tag drops below the title instead of overflowing */
+    .ll-header { flex-wrap: wrap; gap: 12px; padding: 16px 18px; }
+    .ll-header h1 { font-size: 19px; }
+    .ll-header p  { font-size: 12.5px; }
+    .ll-header .ll-tag { margin-left: 0; order: 3; flex-basis: 100%; }
+
+    /* Let images size to the viewport rather than a fixed desktop height */
+    .upload-zone .gradio-image,
+    .upload-zone [data-testid="image"] { min-height: 220px !important; }
+
+    /* Full-width, touch-friendly action buttons */
+    .primary-btn { width: 100% !important; padding: 13px 18px !important; }
+
+    /* Dropdown spans the column on mobile */
+    .viz-dropdown-row .gradio-dropdown { max-width: 100% !important; }
+}
+
+@media (max-width: 480px) {
+    .gradio-container { padding: 10px 10px 28px !important; }
+    .ll-header .ll-mark { width: 38px; height: 38px; }
+    .ll-header h1 { font-size: 17px; }
+}
 """
 
 
