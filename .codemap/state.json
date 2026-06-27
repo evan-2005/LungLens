@@ -1,0 +1,171 @@
+{
+  "updated_at": "2026-06-26T16:23:40.3200469+08:00",
+  "file_count": 96,
+  "hubs": [
+    "chestist-smart-app\\src\\components\\PatientProvider.tsx",
+    "data\\batch_download_zips.py"
+  ],
+  "importers": {
+    "app.py": [
+      "debug_training.py",
+      "test_gradcam.py"
+    ],
+    "chestist-smart-app\\src\\components\\App.tsx": [
+      "chestist-smart-app\\src\\index.js"
+    ],
+    "chestist-smart-app\\src\\components\\DropDown\\DropDown.module.scss": [
+      "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx": [
+      "chestist-smart-app\\src\\components\\DropDown\\__tests__\\DropDown.test.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\FHIRClient.tsx": [
+      "chestist-smart-app\\src\\components\\App.tsx",
+      "chestist-smart-app\\src\\components\\PatientProvider.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\Header\\Header.module.scss": [
+      "chestist-smart-app\\src\\components\\Header\\Header.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\Header\\Header.tsx": [
+      "chestist-smart-app\\src\\components\\Header\\__tests__\\Header.test.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\Navigation\\Navigation.module.scss": [
+      "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx": [
+      "chestist-smart-app\\src\\components\\Navigation\\__tests__\\Navigation.test.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\PatientProvider.tsx": [
+      "chestist-smart-app\\src\\components\\App.tsx",
+      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx",
+      "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx": [
+      "chestist-smart-app\\src\\components\\App.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.module.scss": [
+      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx": [
+      "chestist-smart-app\\src\\components\\PatientSnapshot\\__tests__\\PatientSnapshot.test.tsx"
+    ],
+    "chestist-smart-app\\src\\logo.svg": [
+      "chestist-smart-app\\src\\components\\App.tsx"
+    ],
+    "chestist-smart-app\\src\\styles\\index.scss": [
+      "chestist-smart-app\\src\\index.js"
+    ],
+    "chestist-smart-app\\src\\utils\\ConfigManager.js": [
+      "chestist-smart-app\\src\\utils\\fhirExtract.js",
+      "chestist-smart-app\\src\\utils\\config.test.js"
+    ],
+    "chestist-smart-app\\src\\utils\\fhirExtract.js": [
+      "chestist-smart-app\\src\\components\\App.tsx"
+    ],
+    "chestist-smart-app\\src\\utils\\fontawesomeLibrary.js": [
+      "chestist-smart-app\\src\\setupTests.ts",
+      "chestist-smart-app\\src\\index.js"
+    ],
+    "chestist-smart-app\\src\\utils\\patient.js": [
+      "chestist-smart-app\\src\\utils\\fhirExtract.js"
+    ],
+    "data\\batch_download_zips.py": [
+      "model\\CNNModel.py",
+      "debug_training.py",
+      "app.py",
+      "model\\TrainerTester.py",
+      "model\\DatasetGenerator.py",
+      "model\\Main.py"
+    ],
+    "model\\CNNModel.py": [
+      "model\\TrainerTester.py"
+    ],
+    "model\\DatasetGenerator.py": [
+      "model\\TrainerTester.py"
+    ],
+    "model\\TrainerTester.py": [
+      "model\\Main.py"
+    ]
+  },
+  "imports": {
+    "app.py": [
+      "data\\batch_download_zips.py"
+    ],
+    "chestist-smart-app\\src\\components\\App.tsx": [
+      "chestist-smart-app\\src\\logo.svg",
+      "chestist-smart-app\\src\\utils\\fhirExtract.js",
+      "chestist-smart-app\\src\\components\\FHIRClient.tsx",
+      "chestist-smart-app\\src\\components\\PatientProvider.tsx",
+      "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx": [
+      "chestist-smart-app\\src\\components\\DropDown\\DropDown.module.scss"
+    ],
+    "chestist-smart-app\\src\\components\\DropDown\\__tests__\\DropDown.test.tsx": [
+      "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\Header\\Header.tsx": [
+      "chestist-smart-app\\src\\components\\Header\\Header.module.scss"
+    ],
+    "chestist-smart-app\\src\\components\\Header\\__tests__\\Header.test.tsx": [
+      "chestist-smart-app\\src\\components\\Header\\Header.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx": [
+      "chestist-smart-app\\src\\components\\Navigation\\Navigation.module.scss"
+    ],
+    "chestist-smart-app\\src\\components\\Navigation\\__tests__\\Navigation.test.tsx": [
+      "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\PatientProvider.tsx": [
+      "chestist-smart-app\\src\\components\\FHIRClient.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx": [
+      "chestist-smart-app\\src\\components\\PatientProvider.tsx"
+    ],
+    "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx": [
+      "chestist-smart-app\\src\\components\\PatientProvider.tsx",
+      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.module.scss"
+    ],
+    "chestist-smart-app\\src\\components\\PatientSnapshot\\__tests__\\PatientSnapshot.test.tsx": [
+      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx"
+    ],
+    "chestist-smart-app\\src\\index.js": [
+      "chestist-smart-app\\src\\components\\App.tsx",
+      "chestist-smart-app\\src\\styles\\index.scss",
+      "chestist-smart-app\\src\\utils\\fontawesomeLibrary.js"
+    ],
+    "chestist-smart-app\\src\\setupTests.ts": [
+      "chestist-smart-app\\src\\utils\\fontawesomeLibrary.js"
+    ],
+    "chestist-smart-app\\src\\utils\\config.test.js": [
+      "chestist-smart-app\\src\\utils\\ConfigManager.js"
+    ],
+    "chestist-smart-app\\src\\utils\\fhirExtract.js": [
+      "chestist-smart-app\\src\\utils\\patient.js",
+      "chestist-smart-app\\src\\utils\\ConfigManager.js"
+    ],
+    "debug_training.py": [
+      "app.py",
+      "data\\batch_download_zips.py"
+    ],
+    "model\\CNNModel.py": [
+      "data\\batch_download_zips.py"
+    ],
+    "model\\DatasetGenerator.py": [
+      "data\\batch_download_zips.py"
+    ],
+    "model\\Main.py": [
+      "model\\TrainerTester.py",
+      "data\\batch_download_zips.py"
+    ],
+    "model\\TrainerTester.py": [
+      "data\\batch_download_zips.py",
+      "model\\CNNModel.py",
+      "model\\DatasetGenerator.py"
+    ],
+    "test_gradcam.py": [
+      "app.py"
+    ]
+  },
+  "recent_events": null
+}

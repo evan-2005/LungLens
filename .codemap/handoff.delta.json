@@ -1,0 +1,10 @@
+{
+  "changed": [],
+  "risk_files": [],
+  "recent_events": [],
+  "next_steps": [],
+  "open_questions": [
+    "No changed files detected vs origin/main. Confirm the base ref and branch state.",
+    "No recent timeline events matched the lookback window."
+  ]
+}

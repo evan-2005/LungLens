@@ -1,0 +1,14 @@
+{
+  "only": [
+    "tsx",
+    "js",
+    "py",
+    "ts",
+    "scss"
+  ],
+  "budgets": {},
+  "routing": {
+    "retrieval": {}
+  },
+  "drift": {}
+}

@@ -1,0 +1,13 @@
+{
+  "file_count": 96,
+  "hubs": [
+    {
+      "path": "data\\batch_download_zips.py",
+      "importers": 6
+    },
+    {
+      "path": "chestist-smart-app\\src\\components\\PatientProvider.tsx",
+      "importers": 3
+    }
+  ]
+}
