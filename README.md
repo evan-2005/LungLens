@@ -1,21 +1,24 @@
 # LungLens
 
-LungLens is a clinical diagnostic web application that performs joint classification and segmentation of chest X-rays across four categories: Normal, Pneumonia, Tuberculosis, and Covid-19.
+LungLens is a local, CPU-friendly web application that classifies chest X-rays across four categories (Normal, Pneumonia, Tuberculosis, Covid-19) and shows a Grad-CAM attention heatmap explaining each prediction.
 
-The core model is a Multi-Task U-Net, a lightweight encoder-decoder that predicts diagnostic class probabilities and pixel-level segmentation masks outlining detected pathology in a single forward pass. The interface is built with [Gradio](https://www.gradio.app/) using a restrained, professional clinical theme.
+It runs a hybrid of two models. A **DenseNet-121** classifier makes the diagnostic call, and a **Multi-Task U-Net** provides segmentation and a fallback path. Classification comes from the DenseNet because it discriminates the four classes reliably; the visualization is a Grad-CAM heatmap over the region that drove the prediction. The interface is built with [Gradio](https://www.gradio.app/) using a restrained, professional clinical theme.
 
-> Research and educational tool only. Not a certified medical device. See the Disclaimer at the end.
+> Research and educational tool only. Not a certified medical device. See the Disclaimer at the end. For a candid log of the problems hit while building this and what is worth improving next, see [DEVELOPMENT_NOTES.md](DEVELOPMENT_NOTES.md).
 
 ---
 
 ## Key Features
 
-- **Multi-Task U-Net.** One forward pass produces both class probabilities and a 4-channel segmentation mask. No post-hoc saliency hacks are required.
-- **Lesion segmentation overlay.** Predicted pathology regions are drawn on the scan as a translucent fill plus a contour outline in clinical blue.
-- **Weakly supervised training.** No pixel-level annotations are needed. Anatomically informed pseudo-masks are generated from each image (CLAHE contrast equalisation, Otsu thresholding, an elliptical lung-field region, and morphological cleanup).
-- **Automatic fallback.** If no U-Net checkpoint exists yet, the app loads a DenseNet-121 classifier and converts its Grad-CAM activation into a thresholded overlay, so the app is usable immediately.
-- **In-browser training dashboard.** Fine-tune the U-Net on Kaggle datasets without using a terminal. Logs and status refresh automatically while a run is in progress.
-- **Readable findings.** A clinical-language summary is shown alongside native per-class confidence bars.
+- **Accurate classification.** The DenseNet-121 classifier drives the prediction and separates the four classes cleanly on held-out images.
+- **Uncertainty handling.** When the top class is below a confidence threshold (60 percent), the result is reported as Uncertain rather than a misleading confident label.
+- **Grad-CAM attention heatmap.** Every result shows a translucent heatmap of where the model focused. For a confident abnormal finding, a crisp region outline is added on top. Low activation is suppressed so healthy tissue stays clean.
+- **Sensible overlay for healthy scans.** On a Normal result the heatmap shows where the model assessed for the most likely abnormal class ("none abnormal"), instead of an alarming and unhelpful map over central anatomy.
+- **No first-run freeze.** Both models load and run a warm-up pass at startup, so the first user inference is fast instead of stalling on CPU kernel compilation.
+- **Multi-Task U-Net for segmentation.** A single U-Net forward pass produces class logits and a 4-channel segmentation mask, used as the fallback when the DenseNet is unavailable.
+- **Weakly supervised U-Net training.** No pixel-level annotations are needed. Anatomically informed pseudo-masks are generated from each image (CLAHE contrast equalisation, Otsu thresholding, an elliptical lung-field region, and morphological cleanup).
+- **Class-weighted, regularised training.** Inverse-frequency class weights counter dataset imbalance, and dropout on the classification head reduces overfitting to the majority classes.
+- **In-browser training dashboard.** Train the U-Net on Kaggle datasets without a terminal. Logs and status refresh automatically while a run is in progress.
 - **Learning-rate scheduling.** ReduceLROnPlateau lowers the learning rate when validation Dice stops improving.
 
 ---
