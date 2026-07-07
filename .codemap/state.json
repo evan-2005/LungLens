@@ -1,14 +1,14 @@
 {
-  "updated_at": "2026-06-26T16:23:40.3200469+08:00",
-  "file_count": 96,
+  "updated_at": "2026-07-07T08:52:54.0006012+08:00",
+  "file_count": 98,
   "hubs": [
     "chestist-smart-app\\src\\components\\PatientProvider.tsx",
     "data\\batch_download_zips.py"
   ],
   "importers": {
     "app.py": [
-      "debug_training.py",
-      "test_gradcam.py"
+      "test_gradcam.py",
+      "debug_training.py"
     ],
     "chestist-smart-app\\src\\components\\App.tsx": [
       "chestist-smart-app\\src\\index.js"
@@ -37,8 +37,8 @@
     ],
     "chestist-smart-app\\src\\components\\PatientProvider.tsx": [
       "chestist-smart-app\\src\\components\\App.tsx",
-      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx",
-      "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx"
+      "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx",
+      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx"
     ],
     "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx": [
       "chestist-smart-app\\src\\components\\App.tsx"
@@ -71,11 +71,11 @@
     ],
     "data\\batch_download_zips.py": [
       "model\\CNNModel.py",
-      "debug_training.py",
-      "app.py",
-      "model\\TrainerTester.py",
+      "model\\Main.py",
       "model\\DatasetGenerator.py",
-      "model\\Main.py"
+      "debug_training.py",
+      "model\\TrainerTester.py",
+      "app.py"
     ],
     "model\\CNNModel.py": [
       "model\\TrainerTester.py"
@@ -167,5 +167,244 @@
       "app.py"
     ]
   },
-  "recent_events": null
+  "recent_events": [
+    {
+      "time": "2026-07-07T08:49:31.827526+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1006,
+      "size_delta": -44182,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:49:31.8849531+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1012,
+      "delta": 1012,
+      "size_delta": 44510,
+      "dirty": true,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:49:38.9729426+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1012,
+      "size_delta": -44510,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:49:39.0178473+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1016,
+      "delta": 1016,
+      "size_delta": 44776,
+      "dirty": true,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:49:42.8920746+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1016,
+      "size_delta": -44776,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:49:42.9006208+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1016,
+      "delta": 1016,
+      "size_delta": 44794,
+      "dirty": true,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:49:52.756249+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1016,
+      "size_delta": -44794,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:49:52.7934242+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1028,
+      "delta": 1028,
+      "size_delta": 45452,
+      "dirty": true,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:50:09.7399815+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1028,
+      "size_delta": -45452,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:50:09.839904+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1068,
+      "delta": 1068,
+      "size_delta": 46929,
+      "dirty": true,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:50:17.4654795+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1068,
+      "size_delta": -46929,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:50:17.5062781+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1069,
+      "delta": 1069,
+      "size_delta": 47031,
+      "dirty": true,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:50:25.7932692+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1069,
+      "size_delta": -47031,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:50:25.8787015+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1065,
+      "delta": 1065,
+      "size_delta": 46863,
+      "dirty": true,
+      "importers": 2,
+      "imports": 1
+    },
+    {
+      "time": "2026-07-07T08:50:39.1393526+08:00",
+      "op": "REMOVE",
+      "path": "test_gradcam.py",
+      "lang": "python",
+      "delta": -23,
+      "size_delta": -782,
+      "imports": 1,
+      "related_hot": [
+        "app.py"
+      ]
+    },
+    {
+      "time": "2026-07-07T08:50:39.1607169+08:00",
+      "op": "CREATE",
+      "path": "test_gradcam.py",
+      "lang": "python",
+      "lines": 27,
+      "delta": 27,
+      "size_delta": 992,
+      "dirty": true,
+      "imports": 1,
+      "related_hot": [
+        "app.py"
+      ]
+    },
+    {
+      "time": "2026-07-07T08:52:53.872975+08:00",
+      "op": "REMOVE",
+      "path": "debug_training.py",
+      "lang": "python",
+      "delta": -219,
+      "size_delta": -7592,
+      "imports": 2,
+      "related_hot": [
+        "app.py"
+      ]
+    },
+    {
+      "time": "2026-07-07T08:52:53.9458424+08:00",
+      "op": "CREATE",
+      "path": "debug_training.py",
+      "lang": "python",
+      "lines": 224,
+      "delta": 224,
+      "size_delta": 7837,
+      "dirty": true,
+      "imports": 2,
+      "related_hot": [
+        "app.py"
+      ]
+    }
+  ],
+  "working_set": {
+    "files": {
+      "app.py": {
+        "path": "app.py",
+        "first_touch": "2026-07-07T08:50:25.9345635+08:00",
+        "last_touch": "2026-07-07T08:50:25.9345635+08:00",
+        "edit_count": 1,
+        "net_delta": 1065,
+        "is_hub": false,
+        "importers": 2
+      },
+      "debug_training.py": {
+        "path": "debug_training.py",
+        "first_touch": "2026-07-07T08:52:53.9995037+08:00",
+        "last_touch": "2026-07-07T08:52:53.9995037+08:00",
+        "edit_count": 1,
+        "net_delta": 224,
+        "is_hub": false,
+        "importers": 0
+      },
+      "test_gradcam.py": {
+        "path": "test_gradcam.py",
+        "first_touch": "2026-07-07T08:50:39.233486+08:00",
+        "last_touch": "2026-07-07T08:50:39.233486+08:00",
+        "edit_count": 1,
+        "net_delta": 27,
+        "is_hub": false,
+        "importers": 0
+      }
+    },
+    "started_at": "2026-07-07T08:37:46.9732892+08:00"
+  }
 }

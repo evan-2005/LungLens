@@ -24,7 +24,13 @@ seg_model_path = "chest_segmentation_model.pth"
 training_status = "Not Training"
 training_logs = []
 model = None
+model_lock = threading.Lock()  # Guards lazy (re)loads of the global model.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# On CPU, leaving the thread count unset can let PyTorch oversubscribe cores and
+# actually slow inference. Cap it at the physical core budget for steady latency.
+if device.type == "cpu":
+    torch.set_num_threads(max(1, (os.cpu_count() or 2)))
 
 # Shared configuration
 IMG_SIZE = 224
@@ -175,7 +181,11 @@ class MultiTaskUNet(nn.Module):
         self.down2 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(128, 256))
         self.down3 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(256, 512))
         self.avgpool    = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = nn.Linear(512, num_classes)
+        # Dropout regularises the shallow classification head so it does not
+        # overfit the majority classes. It has no parameters, so checkpoints
+        # trained before this line still load with strict=True.
+        self.cls_dropout = nn.Dropout(0.3)
+        self.classifier  = nn.Linear(512, num_classes)
         self.up1      = nn.ConvTranspose2d(512, 256, 2, stride=2)
         self.conv_up1 = DoubleConv(512, 256)
         self.up2      = nn.ConvTranspose2d(256, 128, 2, stride=2)
@@ -190,7 +200,7 @@ class MultiTaskUNet(nn.Module):
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
-        cls = self.classifier(torch.flatten(self.avgpool(x4), 1))
+        cls = self.classifier(self.cls_dropout(torch.flatten(self.avgpool(x4), 1)))
         d = self.conv_up1(torch.cat([self.up1(x4), x3], 1))
         d = self.conv_up2(torch.cat([self.up2(d),  x2], 1))
         d = self.conv_up3(torch.cat([self.up3(d),  x1], 1))
@@ -378,7 +388,19 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
         training_logs.append("Initializing MultiTaskUNet...")
         model = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
 
-        class_crit = nn.CrossEntropyLoss()
+        # Inverse-frequency class weights so the minority classes (typically
+        # Covid-19) are not drowned out by the majority Normal/Pneumonia images.
+        # Weights are normalised to mean 1.0 to keep the loss scale stable.
+        counts = np.bincount(train_labels, minlength=NUM_CLASSES).astype(np.float64)
+        inv = 1.0 / np.clip(counts, 1.0, None)
+        class_weights = torch.tensor(
+            inv / inv.mean(), dtype=torch.float32, device=device)
+        training_logs.append(
+            "Class counts: "
+            + ", ".join(f"{CLASSES[i]}={int(counts[i])}" for i in range(NUM_CLASSES))
+        )
+
+        class_crit = nn.CrossEntropyLoss(weight=class_weights)
         seg_crit   = DiceBCELoss()
         optimizer  = optim.Adam(model.parameters(), lr=lr)
         # Reduce LR when validation Dice plateaus so the segmentation head keeps
@@ -605,6 +627,46 @@ def get_training_logs():
     return "\n".join(training_logs), training_status, gr.Timer(active=_is_training_active())
 
 
+# Model loading / warm-up
+def warm_up_model(m):
+    """
+    Run one dummy forward pass so PyTorch compiles its CPU convolution kernels
+    now, at startup, instead of on the user's first click. This is the fix for
+    the first-load freeze: without it the initial inference blocks for several
+    seconds while oneDNN/MKL JIT-compiles, and Gradio just shows a spinner.
+    """
+    try:
+        m.eval()
+        dummy = torch.zeros(1, 3, IMG_SIZE, IMG_SIZE, device=device)
+        with torch.no_grad():
+            m(dummy)
+    except Exception as e:
+        print(f"Warning: model warm-up failed (first inference may be slow): {e}")
+
+
+def load_model_from_disk():
+    """
+    Load whichever trained model is available (segmentation U-Net preferred,
+    classifier fallback) and warm it up. Returns the model or None. Centralises
+    what used to be duplicated between startup and lazy inference loading.
+    """
+    if os.path.exists(seg_model_path):
+        m = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
+        m.load_state_dict(torch.load(seg_model_path, map_location=device))
+        m.to(device)
+        m.eval()
+        warm_up_model(m)
+        return m
+    if os.path.exists(model_path):
+        m = CNNModel(classCount=NUM_CLASSES, isTrained=False)
+        m.load_state_dict(torch.load(model_path, map_location=device))
+        m.to(device)
+        m.eval()
+        warm_up_model(m)
+        return m
+    return None
+
+
 # Inference
 def predict_image(image, target_class_name):
     global model
@@ -622,15 +684,16 @@ def predict_image(image, target_class_name):
                  or (not has_seg and isinstance(model, MultiTaskUNet)))
 
     if need_load:
+        # Serialise (re)loads so a background training thread swapping `model`
+        # cannot race a concurrent inference request. warm_up_model runs the
+        # first forward pass here so the click itself does not block on JIT.
         try:
-            if has_seg:
-                model = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
-                model.load_state_dict(torch.load(seg_model_path, map_location=device))
-            else:
-                model = CNNModel(classCount=NUM_CLASSES, isTrained=False)
-                model.load_state_dict(torch.load(model_path, map_location=device))
-            model.to(device)
-            model.eval()
+            with model_lock:
+                loaded = load_model_from_disk()
+                if loaded is None:
+                    gr.Warning("No trained model found. Please train a model first.")
+                    return "", {}, gr.update(value=None)
+                model = loaded
         except Exception as e:
             gr.Warning(f"Failed to load model: {e}")
             return "", {}, gr.update(value=None)
@@ -718,23 +781,19 @@ def predict_image(image, target_class_name):
         return "", {}, gr.update(value=None)
 
 
-# Startup model load
-if os.path.exists(seg_model_path):
-    try:
-        model = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
-        model.load_state_dict(torch.load(seg_model_path, map_location=device))
-        model.to(device); model.eval()
-        print("Loaded MultiTaskUNet.")
-    except Exception as e:
-        print(f"Warning: Could not load U-Net: {e}")
-elif os.path.exists(model_path):
-    try:
-        model = CNNModel(classCount=NUM_CLASSES, isTrained=False)
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        model.to(device); model.eval()
-        print("Loaded fallback CNN classifier.")
-    except Exception as e:
-        print(f"Warning: Could not load classifier: {e}")
+# Startup model load. Loading + warming up here (rather than on the first click)
+# is what removes the first-inference freeze described in the system plan.
+try:
+    model = load_model_from_disk()
+    if model is None:
+        print("No trained model found on disk. Train a model before inference.")
+    elif isinstance(model, MultiTaskUNet):
+        print("Loaded MultiTaskUNet (warmed up).")
+    else:
+        print("Loaded fallback CNN classifier (warmed up).")
+except Exception as e:
+    model = None
+    print(f"Warning: Could not load model at startup: {e}")
 
 
 # UI

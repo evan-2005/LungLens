@@ -8,10 +8,14 @@ img = Image.fromarray(np.uint8(np.random.rand(224, 224) * 255))
 
 try:
     print("Testing prediction and Segmentation overlay...")
-    findings_text, superimposed, upload_view_update, results_view_update = predict_image(img, "Pneumonia")
+    findings_text, prob_dict, heatmap_update = predict_image(img, "Pneumonia")
     print("=== Diagnostic Findings ===")
     print(findings_text)
-    
+    print("=== Class Confidence ===")
+    print(prob_dict)
+
+    # gr.update(value=...) returns a dict-like update; pull the image back out.
+    superimposed = heatmap_update.get("value") if isinstance(heatmap_update, dict) else heatmap_update
     if superimposed is not None:
         superimposed_np = np.array(superimposed)
         print("Superimposed Image shape (should be 224x224x3):", superimposed_np.shape)

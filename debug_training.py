@@ -3,6 +3,11 @@ import torch
 import torch.nn as nn
 import os
 import sys
+
+# The check/cross glyphs below are UTF-8; the default Windows console is cp1252
+# and would raise UnicodeEncodeError on every status print. Force UTF-8 output.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 from app import (
     MultiTaskUNet, DiceBCELoss, dice_coefficient, SegmentationDataset,
     collect_data, device
