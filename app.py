@@ -23,8 +23,13 @@ model_path = "chest_model_4class.pth"
 seg_model_path = "chest_segmentation_model.pth"
 training_status = "Not Training"
 training_logs = []
-model = None
-model_lock = threading.Lock()  # Guards lazy (re)loads of the global model.
+# Hybrid inference: the DenseNet checkpoint is a strong discriminative
+# classifier, while the U-Net checkpoint provides segmentation masks but has a
+# collapsed classification head (it outputs a near-constant prior). Each model
+# does the job it is actually good at.
+seg_model = None   # MultiTaskUNet: segmentation masks, fallback classifier
+cls_model = None   # DenseNet-121: primary classifier, Grad-CAM fallback
+model_lock = threading.Lock()  # Guards loads/swaps of the global models.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # On CPU, leaving the thread count unset can let PyTorch oversubscribe cores and
@@ -38,8 +43,14 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 VAL_SPLIT = 0.2
 SEG_LOSS_WEIGHT = 2.0
-OVERLAY_THRESHOLD = 0.45
+OVERLAY_THRESHOLD = 0.45        # Grad-CAM maps are relative, threshold after normalising
+MASK_DISPLAY_THRESHOLD = 0.5    # U-Net masks are probabilities, threshold the raw sigmoid
+CONFIDENCE_THRESHOLD = 0.60     # Below this top-class probability, report Uncertain
+OVERLAY_MIN_PROB = 0.15         # Do not draw an overlay for a class this improbable
+HEATMAP_FLOOR = 0.35            # Hide diffuse low activation so healthy areas stay clean
+MIN_REGION_AREA_FRAC = 0.003    # Drop overlay specks smaller than 0.3% of the image
 OVERLAY_COLOR = (0, 113, 227)  # RGB clinical blue used for the segmentation overlay
+AUTO_OVERLAY = "Auto (predicted class)"
 
 
 def _normalize_transform():
@@ -326,7 +337,7 @@ def collect_data():
 
 # Training
 def run_training_thread(num_samples, epochs, lr, batch_size):
-    global training_status, training_logs, model
+    global training_status, training_logs, seg_model
     training_status = "Training..."
     training_logs = []
     writer = None
@@ -385,8 +396,10 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=0)
         val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=0)
 
+        # Train on a local network; the global seg_model is only swapped after
+        # the run finishes so inference never sees a half-trained model.
         training_logs.append("Initializing MultiTaskUNet...")
-        model = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
+        net = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
 
         # Inverse-frequency class weights so the minority classes (typically
         # Covid-19) are not drowned out by the majority Normal/Pneumonia images.
@@ -402,7 +415,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
 
         class_crit = nn.CrossEntropyLoss(weight=class_weights)
         seg_crit   = DiceBCELoss()
-        optimizer  = optim.Adam(model.parameters(), lr=lr)
+        optimizer  = optim.Adam(net.parameters(), lr=lr)
         # Reduce LR when validation Dice plateaus so the segmentation head keeps
         # improving instead of stalling at a fixed learning rate.
         scheduler  = optim.lr_scheduler.ReduceLROnPlateau(
@@ -417,7 +430,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
         }
 
         for epoch in range(epochs):
-            model.train()
+            net.train()
             run_loss = correct = total = 0
             total_dice = 0.0
 
@@ -429,7 +442,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
                     target_labels = target_labels.to(device)
 
                     optimizer.zero_grad()
-                    cls_logits, pred_masks = model(inputs)
+                    cls_logits, pred_masks = net(inputs)
                     loss = class_crit(cls_logits, target_labels) + SEG_LOSS_WEIGHT * seg_crit(pred_masks, target_masks)
 
                     if torch.isnan(loss) or torch.isinf(loss):
@@ -437,7 +450,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
                         continue
 
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
                     optimizer.step()
 
                     run_loss += loss.item()
@@ -465,7 +478,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
             train_acc  = 100.0 * correct / total if total > 0 else 0
             train_dice = total_dice / max(1, len(train_loader))
 
-            model.eval()
+            net.eval()
             val_loss = val_correct = val_total = 0
             val_dice_sum = 0.0
 
@@ -477,7 +490,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
                         target_masks  = target_masks.to(device)
                         target_labels = target_labels.to(device)
 
-                        cls_logits, pred_masks = model(inputs)
+                        cls_logits, pred_masks = net(inputs)
                         loss = class_crit(cls_logits, target_labels) + SEG_LOSS_WEIGHT * seg_crit(pred_masks, target_masks)
 
                         if torch.isnan(loss) or torch.isinf(loss):
@@ -529,7 +542,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
 
             if val_dice > best_val_dice:
                 best_val_dice = val_dice
-                torch.save(model.state_dict(), seg_model_path)
+                torch.save(net.state_dict(), seg_model_path)
                 training_logs.append(f"--> Saved best model (Val Dice: {best_val_dice:.4f})")
 
         import matplotlib.pyplot as plt
@@ -562,6 +575,22 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
         training_logs.append("Graph saved as training_curves.png")
         writer.close()
         writer = None
+
+        # Publish the best checkpoint for inference only after the run ends so
+        # requests never see a half-trained model in train mode.
+        publish = net
+        if os.path.exists(seg_model_path):
+            try:
+                publish = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
+                publish.load_state_dict(torch.load(seg_model_path, map_location=device))
+                publish.to(device)
+            except Exception as e:
+                training_logs.append(f"WARNING: could not reload best checkpoint: {e}")
+                publish = net
+        publish.eval()
+        warm_up_model(publish)
+        with model_lock:
+            seg_model = publish
 
         training_status = "Training Finished"
         training_logs.append("Done.")
@@ -644,59 +673,117 @@ def warm_up_model(m):
         print(f"Warning: model warm-up failed (first inference may be slow): {e}")
 
 
-def load_model_from_disk():
+def load_models_from_disk():
     """
-    Load whichever trained model is available (segmentation U-Net preferred,
-    classifier fallback) and warm it up. Returns the model or None. Centralises
-    what used to be duplicated between startup and lazy inference loading.
+    Load both checkpoints if present and warm them up. Returns
+    (seg_model_or_None, cls_model_or_None). A failure loading one model does
+    not prevent the other from loading.
     """
+    seg = cls = None
     if os.path.exists(seg_model_path):
-        m = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
-        m.load_state_dict(torch.load(seg_model_path, map_location=device))
-        m.to(device)
-        m.eval()
-        warm_up_model(m)
-        return m
+        try:
+            seg = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
+            seg.load_state_dict(torch.load(seg_model_path, map_location=device))
+            seg.to(device)
+            seg.eval()
+            warm_up_model(seg)
+        except Exception as e:
+            print(f"Warning: could not load segmentation model: {e}")
+            seg = None
     if os.path.exists(model_path):
-        m = CNNModel(classCount=NUM_CLASSES, isTrained=False)
-        m.load_state_dict(torch.load(model_path, map_location=device))
-        m.to(device)
-        m.eval()
-        warm_up_model(m)
-        return m
-    return None
+        try:
+            cls = CNNModel(classCount=NUM_CLASSES, isTrained=False)
+            cls.load_state_dict(torch.load(model_path, map_location=device))
+            cls.to(device)
+            cls.eval()
+            warm_up_model(cls)
+        except Exception as e:
+            print(f"Warning: could not load classifier model: {e}")
+            cls = None
+    return seg, cls
+
+
+def build_heatmap(orig_np, mask, alpha=0.5):
+    """
+    Blend a translucent Grad-CAM heatmap over the full-resolution image.
+
+    The mask (float in [0, 1]) is used both to colourise (JET) and as a
+    per-pixel alpha, so only activated regions get colour and flat areas keep
+    the original X-ray. This is a soft attention map, not a hard "finding"
+    marker, so it never reads as a false lesion the way a filled block did.
+    """
+    orig_h, orig_w = orig_np.shape[:2]
+    m = np.clip(mask, 0.0, 1.0).astype(np.float32)
+    m = cv2.resize(m, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+
+    # Suppress diffuse low activation: rescale [floor, 1] to [0, 1] and zero the
+    # rest, so only genuine attention gets coloured and healthy tissue keeps the
+    # original grayscale instead of a full-image colour wash.
+    m = np.where(m < HEATMAP_FLOOR, 0.0, (m - HEATMAP_FLOOR) / (1.0 - HEATMAP_FLOOR))
+
+    heat = cv2.applyColorMap((m * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    heat = cv2.cvtColor(heat, cv2.COLOR_BGR2RGB).astype(np.float32)
+
+    a = (alpha * m)[..., None]
+    result = (orig_np.astype(np.float32) * (1.0 - a) + heat * a)
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def clean_region(mask, threshold, out_shape):
+    """
+    Threshold the mask on its RAW values (no min-max stretching, which forces a
+    region even where the class is absent), remove speckle below
+    MIN_REGION_AREA_FRAC, and resize to the original resolution. Returns a
+    full-size binary region, or None if nothing survives.
+    """
+    binary = (mask > threshold).astype(np.uint8)
+    if not binary.any():
+        return None
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+
+    num, comp_map, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    min_area = MIN_REGION_AREA_FRAC * binary.size
+    cleaned = np.zeros_like(binary)
+    for comp in range(1, num):
+        if stats[comp, cv2.CC_STAT_AREA] >= min_area:
+            cleaned[comp_map == comp] = 1
+    if not cleaned.any():
+        return None
+
+    orig_h, orig_w = out_shape[:2]
+    return cv2.resize(cleaned, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+
+
+def outline_region(img, region):
+    """Draw the region-of-interest outline on top of the (already heatmapped) image."""
+    orig_h, orig_w = img.shape[:2]
+    contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    thickness = max(2, round(min(orig_w, orig_h) / IMG_SIZE))
+    cv2.drawContours(img, contours, -1, OVERLAY_COLOR, thickness)
+    return img
 
 
 # Inference
 def predict_image(image, target_class_name):
-    global model
+    global seg_model, cls_model
 
-    has_seg   = os.path.exists(seg_model_path)
-    has_class = os.path.exists(model_path)
-
-    if not has_seg and not has_class:
-        gr.Warning("No trained model found. Please train a model first.")
-        return "", {}, gr.update(value=None)
-
-    # Load correct model type if not already loaded
-    need_load = (model is None
-                 or (has_seg   and not isinstance(model, MultiTaskUNet))
-                 or (not has_seg and isinstance(model, MultiTaskUNet)))
-
-    if need_load:
-        # Serialise (re)loads so a background training thread swapping `model`
+    if seg_model is None and cls_model is None:
+        # Serialise loads so a background training thread swapping the globals
         # cannot race a concurrent inference request. warm_up_model runs the
-        # first forward pass here so the click itself does not block on JIT.
+        # first forward pass at load time so the click does not block on JIT.
         try:
             with model_lock:
-                loaded = load_model_from_disk()
-                if loaded is None:
-                    gr.Warning("No trained model found. Please train a model first.")
-                    return "", {}, gr.update(value=None)
-                model = loaded
+                if seg_model is None and cls_model is None:
+                    seg_model, cls_model = load_models_from_disk()
         except Exception as e:
             gr.Warning(f"Failed to load model: {e}")
             return "", {}, gr.update(value=None)
+
+    if seg_model is None and cls_model is None:
+        gr.Warning("No trained model found. Please train a model first.")
+        return "", {}, gr.update(value=None)
 
     if image is None:
         gr.Warning("Please upload a valid X-ray image.")
@@ -718,61 +805,116 @@ def predict_image(image, target_class_name):
             transforms.ToTensor(),
             _normalize_transform()])
 
-        orig_img   = cv2.resize(np.array(image), (IMG_SIZE, IMG_SIZE))
-        target_idx = CLASSES.index(target_class_name)
+        orig_np = np.array(image)
 
-        model.eval()
-        if isinstance(model, MultiTaskUNet):
-            with torch.no_grad():
-                t = tf(image).unsqueeze(0).to(device)
-                cls_logits, pred_masks = model(t)
-                probabilities = torch.softmax(cls_logits, 1)[0].cpu()
-                mask = pred_masks[0, target_idx].cpu().numpy()
-        else:
-            with torch.no_grad():
-                t = tf(image).unsqueeze(0).to(device)
-                probabilities = torch.softmax(model(t), 1)[0].cpu()
-            target_layer = get_gradcam_layer(model)
-            grad_cam     = GradCAM(model, target_layer)
-            grad_t       = tf(image).unsqueeze(0).to(device)
-            grad_t.requires_grad_(True)
-            mask = grad_cam.generate_heatmap(grad_t, target_idx)
+        # Classification comes from the DenseNet when available (the U-Net
+        # head is only a fallback); masks come from the U-Net when available.
+        pred_masks = None
+        with torch.no_grad():
+            t = tf(image).unsqueeze(0).to(device)
+            seg_logits = None
+            if seg_model is not None:
+                seg_model.eval()
+                seg_logits, pred_masks = seg_model(t)
+            if cls_model is not None:
+                cls_model.eval()
+                cls_logits = cls_model(t)
+            else:
+                cls_logits = seg_logits
+            probabilities = torch.softmax(cls_logits, 1)[0].cpu()
 
-        top_idx  = int(torch.argmax(probabilities))
-        if top_idx < 0 or top_idx >= len(CLASSES):
-            raise ValueError(f"Invalid prediction index {top_idx}, expected 0-{len(CLASSES)-1}")
         if probabilities.shape[0] != len(CLASSES):
             raise RuntimeError(f"Probability shape mismatch: {probabilities.shape[0]} vs {len(CLASSES)}")
+        top_idx  = int(torch.argmax(probabilities))
         top_cls  = CLASSES[top_idx]
-        probs    = [float(probabilities[i] * 100) for i in range(len(CLASSES))]
+        top_prob = float(probabilities[top_idx])
 
         # Native confidence bars (gr.Label), clearer than a markdown list.
         prob_dict = {CLASSES[i]: float(probabilities[i]) for i in range(len(CLASSES))}
 
-        txt  = f"### Diagnostic Findings\n\nThe model found a **{probs[top_idx]:.1f}% probability of {top_cls}**.\n\n"
-        descriptions = {
-            "Normal":       "No significant abnormalities detected. The lungs appear clear.",
-            "Pneumonia":    "Indications consistent with Pneumonia. The overlay highlights potential zones of consolidation.",
-            "Tuberculosis": "Indications consistent with Tuberculosis. The overlay highlights potential focal lesions or cavities.",
-            "Covid-19":     "Indications consistent with Covid-19. The overlay highlights potential bilateral ground-glass opacities.",
-        }
-        txt += descriptions[top_cls]
+        is_uncertain = top_prob < CONFIDENCE_THRESHOLD
 
-        # Build overlay
-        superimposed = orig_img.copy()
-        if target_idx > 0 and mask.max() > 0:
-            # Normalize mask to [0, 1] to ensure highlights are visible even with low-confidence logits
-            denom = mask.max() - mask.min()
-            if denom > 0:
-                mask = (mask - mask.min()) / denom
-            else:
-                mask = mask / mask.max()
-            binary = (mask > OVERLAY_THRESHOLD).astype(np.uint8) * 255
-            colored = np.zeros_like(orig_img)
-            colored[mask > OVERLAY_THRESHOLD] = OVERLAY_COLOR
-            cv2.addWeighted(colored, 0.4, superimposed, 1.0, 0, superimposed)
-            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(superimposed, contours, -1, OVERLAY_COLOR, 2)
+        # Pick the class to visualise. Explicit dropdown choice wins. In auto
+        # mode we normally visualise the prediction, but for a Normal (or
+        # uncertain-Normal) result we instead show where the model assessed for
+        # the most likely ABNORMAL class. Grad-CAM for "Normal" just lights up
+        # central anatomy, which looks alarming and is not useful; showing the
+        # lung-assessment map keeps the heatmap meaningful and never empty.
+        is_auto = target_class_name not in CLASSES
+        abnormal_probs = probabilities.clone()
+        abnormal_probs[0] = -1.0
+        top_abnormal_idx = int(torch.argmax(abnormal_probs))
+
+        if not is_auto:
+            viz_idx = CLASSES.index(target_class_name)
+        elif top_idx != 0:
+            viz_idx = top_idx
+        else:
+            viz_idx = top_abnormal_idx
+        viz_prob = float(probabilities[viz_idx])
+        viz_cls = CLASSES[viz_idx]
+
+        # A confident, abnormal prediction is one where the visualised class is
+        # the actual prediction; only then do we add the crisp region outline.
+        is_confident_finding = (not is_uncertain and viz_idx == top_idx
+                                and top_idx != 0 and viz_prob >= OVERLAY_MIN_PROB)
+
+        # Compute the attention map. Grad-CAM from the DenseNet is preferred: it
+        # marks the lung region that drove the score. The U-Net mask is only a
+        # fallback (trained on brightness pseudo-masks, it tends to trace bone,
+        # which is what made the old shading look wrong).
+        mask = None
+        threshold = MASK_DISPLAY_THRESHOLD
+        if cls_model is not None:
+            target_layer = get_gradcam_layer(cls_model)
+            grad_cam     = GradCAM(cls_model, target_layer)
+            grad_t       = tf(image).unsqueeze(0).to(device)
+            grad_t.requires_grad_(True)
+            mask = grad_cam.generate_heatmap(grad_t, viz_idx)
+            threshold = OVERLAY_THRESHOLD
+        elif pred_masks is not None and viz_idx > 0:
+            mask = pred_masks[0, viz_idx].cpu().numpy()
+
+        superimposed = orig_np
+        has_region = False
+        if mask is not None:
+            superimposed = build_heatmap(orig_np, mask)
+            if is_confident_finding:
+                region = clean_region(mask, threshold, orig_np.shape)
+                if region is not None:
+                    superimposed = outline_region(superimposed, region)
+                    has_region = True
+
+        descriptions = {
+            "Normal":       "No abnormal opacities detected in the lung fields.",
+            "Pneumonia":    "Findings consistent with pneumonia. Warmer areas indicate possible consolidation.",
+            "Tuberculosis": "Findings consistent with tuberculosis. Warmer areas indicate possible focal lesions or cavitation.",
+            "Covid-19":     "Findings consistent with Covid-19. Warmer areas indicate possible bilateral ground-glass opacities.",
+        }
+
+        if is_uncertain:
+            txt = (f"**Prediction:** Uncertain\n\n"
+                   f"The top class is {top_cls} at {top_prob * 100:.1f}%, below the "
+                   f"{CONFIDENCE_THRESHOLD * 100:.0f}% reporting threshold. Review the class "
+                   f"confidence values; a repeat or higher quality image may help.")
+        else:
+            txt = (f"**Prediction:** {top_cls} ({top_prob * 100:.1f}% confidence)\n\n"
+                   f"{descriptions[top_cls]}")
+
+        # Explain what the heatmap represents for this specific case.
+        if mask is None:
+            txt += "\n\nNo attention map is available for this model."
+        elif is_confident_finding:
+            txt += (f"\n\nHeatmap: region driving the {viz_cls} prediction. "
+                    f"The outline marks the most influential area.")
+        elif is_auto and top_idx == 0:
+            txt += (f"\n\nHeatmap: areas the model assessed for {viz_cls} "
+                    f"(the next most likely class); none reached an abnormal level.")
+        elif is_uncertain:
+            txt += (f"\n\nHeatmap: areas the model weighed for {viz_cls}. "
+                    f"Interpret with caution while the prediction is uncertain.")
+        else:
+            txt += f"\n\nHeatmap: model attention for {viz_cls} ({viz_prob * 100:.1f}%)."
 
         return txt, prob_dict, gr.update(value=Image.fromarray(superimposed))
 
@@ -784,197 +926,159 @@ def predict_image(image, target_class_name):
 # Startup model load. Loading + warming up here (rather than on the first click)
 # is what removes the first-inference freeze described in the system plan.
 try:
-    model = load_model_from_disk()
-    if model is None:
+    seg_model, cls_model = load_models_from_disk()
+    if seg_model is None and cls_model is None:
         print("No trained model found on disk. Train a model before inference.")
-    elif isinstance(model, MultiTaskUNet):
-        print("Loaded MultiTaskUNet (warmed up).")
     else:
-        print("Loaded fallback CNN classifier (warmed up).")
+        loaded = [name for name, m in
+                  [("U-Net segmentation", seg_model), ("DenseNet-121 classifier", cls_model)]
+                  if m is not None]
+        print(f"Loaded and warmed up: {', '.join(loaded)}.")
 except Exception as e:
-    model = None
-    print(f"Warning: Could not load model at startup: {e}")
+    seg_model = cls_model = None
+    print(f"Warning: Could not load models at startup: {e}")
 
 
 # UI
-apple_css = """
+ll_css = """
 :root {
-    --ll-accent: #1F5C8B;
-    --ll-accent-hi: #2A6FA3;
-    --ll-bg: #EEF1F4;
+    --ll-accent: #17557F;
+    --ll-bg: #F2F4F6;
     --ll-surface: #FFFFFF;
-    --ll-text: #1B2733;
-    --ll-text-2: #4A5A6A;
-    --ll-muted: #8A97A4;
-    --ll-border: rgba(20,40,60,0.10);
-    --ll-radius: 12px;
+    --ll-text: #1A2229;
+    --ll-text-2: #55616C;
+    --ll-muted: #7C8792;
+    --ll-border: #D8DEE4;
 }
 .dark {
-    --ll-accent: #4F9AD1;
-    --ll-accent-hi: #62A9DC;
-    --ll-bg: #11161C;
-    --ll-surface: #1A222B;
-    --ll-text: #E6ECF2;
-    --ll-text-2: #B8C2CC;
-    --ll-muted: #7E8A95;
-    --ll-border: rgba(255,255,255,0.08);
+    --ll-accent: #6FA8CE;
+    --ll-bg: #14181C;
+    --ll-surface: #1B2127;
+    --ll-text: #E4E9ED;
+    --ll-text-2: #A9B4BD;
+    --ll-muted: #76818B;
+    --ll-border: #2C343C;
 }
 
 html, body, .gradio-container {
     background-color: var(--ll-bg) !important;
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif !important;
     min-height: 100vh !important; margin: 0 !important; padding: 0 !important;
 }
-.gradio-container { max-width: 1600px !important; width: 100% !important; margin: 0 auto !important; padding: 20px 32px 48px !important; box-sizing: border-box !important; }
-@media (min-width: 1700px) { .gradio-container { max-width: 90vw !important; } }
+.gradio-container { max-width: 1280px !important; width: 100% !important; margin: 0 auto !important; padding: 0 24px 40px !important; box-sizing: border-box !important; }
 
-/* Header */
+/* Header: plain title row with a hairline rule; the right side reports the
+   loaded model, which is information, not decoration. */
 .ll-header {
-    display: flex; align-items: center; gap: 16px;
-    background: var(--ll-surface);
-    border: 1px solid var(--ll-border);
-    border-top: 3px solid var(--ll-accent);
-    border-radius: var(--ll-radius);
-    padding: 20px 24px;
-    margin: 4px 0 20px;
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 18px 2px 12px;
+    border-bottom: 1px solid var(--ll-border);
+    margin-bottom: 18px;
 }
-.ll-header .ll-mark {
-    flex: 0 0 auto; width: 44px; height: 44px; border-radius: 10px;
-    background: rgba(31,92,139,0.10); display: flex; align-items: center; justify-content: center;
-}
-.dark .ll-header .ll-mark { background: rgba(79,154,209,0.16); }
-.ll-header .ll-mark svg { width: 26px; height: 26px; stroke: var(--ll-accent); }
-.ll-header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; color: var(--ll-text); }
-.ll-header p  { margin: 3px 0 0; font-size: 13.5px; color: var(--ll-text-2); }
-.ll-header .ll-tag {
-    margin-left: auto; align-self: flex-start;
-    font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
-    color: var(--ll-muted); border: 1px solid var(--ll-border); border-radius: 6px; padding: 4px 9px;
-}
+.ll-header h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--ll-text); }
+.ll-header .ll-sub { font-size: 13px; color: var(--ll-text-2); }
+.ll-header .ll-status { margin-left: auto; font-size: 12px; color: var(--ll-muted); white-space: nowrap; }
 
-/* Panel card */
+/* Panels: flat surfaces, hairline border, small radius, no shadow */
 .custom-panel {
     background: var(--ll-surface) !important;
     border: 1px solid var(--ll-border) !important;
-    border-radius: var(--ll-radius) !important;
-    box-shadow: 0 1px 2px rgba(20,40,60,0.04) !important;
-    padding: 22px !important;
-    margin-bottom: 16px !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
+    padding: 20px !important;
+    margin-bottom: 14px !important;
 }
 
-/* Typography (scoped to panels) */
 .custom-panel h1, .custom-panel h2, .custom-panel h3, .custom-panel h4,
-.custom-panel .gradio-markdown h1, .custom-panel .gradio-markdown h2,
-.custom-panel .gradio-markdown h3, .custom-panel .gradio-markdown h4,
-.custom-panel .gradio-markdown strong {
-    font-weight: 650 !important; letter-spacing: -0.01em !important; color: var(--ll-text) !important;
+.custom-panel .gradio-markdown h3, .custom-panel .gradio-markdown strong {
+    font-weight: 600 !important; letter-spacing: 0 !important; color: var(--ll-text) !important;
 }
+.custom-panel .gradio-markdown h3 { font-size: 14px !important; text-transform: none !important; }
 .custom-panel p, .custom-panel label,
 .custom-panel .gradio-markdown p, .custom-panel .gradio-markdown li {
     font-weight: 400 !important; color: var(--ll-text-2) !important;
 }
 
-/* Tab nav */
-.tab-nav button { color: var(--ll-text-2) !important; font-weight: 600 !important; }
-.tab-nav button.selected { color: var(--ll-accent) !important; }
+/* Tabs: quiet text, accent only on the active tab */
+.tab-nav button { color: var(--ll-text-2) !important; font-weight: 500 !important; }
+.tab-nav button.selected { color: var(--ll-accent) !important; font-weight: 600 !important; }
 
-/* Buttons */
+/* Buttons: flat, 4px radius. Primary uses the accent; secondary stays neutral. */
 .primary-btn {
-    border-radius: 8px !important;
+    border-radius: 4px !important;
     background: var(--ll-accent) !important;
-    color: #ffffff !important; font-weight: 600 !important; border: none !important;
-    padding: 11px 22px !important;
+    color: #ffffff !important; font-weight: 600 !important; border: 1px solid var(--ll-accent) !important;
+    padding: 10px 20px !important;
     box-shadow: none !important;
-    transition: background-color .15s ease !important;
 }
-.primary-btn:hover { background: var(--ll-accent-hi) !important; }
-.primary-btn:focus-visible { outline: 2px solid var(--ll-accent-hi) !important; outline-offset: 2px !important; }
+.primary-btn:hover { filter: brightness(1.08); }
+.primary-btn:focus-visible { outline: 2px solid var(--ll-accent) !important; outline-offset: 2px !important; }
+/* The dark palette uses a light accent, so the button label must be dark to
+   keep readable contrast. */
+.dark .primary-btn { color: #10181F !important; }
+.secondary-btn {
+    border-radius: 4px !important;
+    background: var(--ll-surface) !important;
+    color: var(--ll-text) !important; font-weight: 500 !important;
+    border: 1px solid var(--ll-border) !important;
+    padding: 10px 20px !important;
+    box-shadow: none !important;
+}
+.secondary-btn:hover { border-color: var(--ll-muted) !important; }
+.secondary-btn:focus-visible { outline: 2px solid var(--ll-accent) !important; outline-offset: 2px !important; }
 
-/* Upload zone */
+/* Image wells: solid hairline instead of a dashed drop-zone */
 .upload-zone .gradio-image, .upload-zone [data-testid="image"] {
-    border: 1.5px dashed #C2CCD6 !important; border-radius: 10px !important; background: transparent !important;
-    transition: border-color .15s ease, background .15s ease !important;
+    border: 1px solid var(--ll-border) !important; border-radius: 4px !important; background: transparent !important;
 }
-.dark .upload-zone .gradio-image { border-color: #3A4651 !important; }
-.upload-zone .gradio-image:hover, .upload-zone .gradio-image:focus-within {
-    border-color: var(--ll-accent) !important; background: rgba(31,92,139,0.03) !important;
-}
+.upload-zone .gradio-image:focus-within { border-color: var(--ll-accent) !important; }
 
-/* Dropdown centring */
-.viz-dropdown-row { justify-content: center !important; }
-.viz-dropdown-row .gradio-dropdown { max-width: 340px !important; width: 100% !important; }
+.conf-label, .conf-label .gr-label { border-radius: 4px !important; }
 
-/* Confidence label bars */
-.conf-label, .conf-label .gr-label { border-radius: 10px !important; }
-
-/* Status field */
 .status-pill textarea, .status-pill input { font-weight: 600 !important; }
 
-/* Disclaimer */
 .disclaimer-note {
-    font-size: 12px !important; color: var(--ll-muted) !important; text-align: center !important;
-    margin-top: 10px !important; margin-bottom: 0 !important; line-height: 1.5 !important; padding: 0 8px !important;
+    font-size: 12px !important; color: var(--ll-muted) !important; text-align: left !important;
+    margin-top: 8px !important; margin-bottom: 0 !important; line-height: 1.5 !important;
 }
 
 footer { display: none !important; }
 
-/* Fade-in animation */
-.fade-in { animation: fadeIn 0.4s ease both; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-
 /* ----- Mobile / responsive ----- */
 @media (max-width: 768px) {
-    /* Tighter page gutters on small screens */
-    .gradio-container { padding: 12px 14px 32px !important; }
+    .gradio-container { padding: 0 12px 28px !important; }
 
-    /* Stack any side-by-side Rows into a single column */
     .gradio-container .row,
     .gradio-container div[class*="row"] { flex-direction: column !important; flex-wrap: wrap !important; }
     .gradio-container .column,
     .gradio-container div[class*="column"] { min-width: 100% !important; }
 
-    /* Slimmer card padding so content isn't cramped */
-    .custom-panel { padding: 16px !important; }
+    .custom-panel { padding: 14px !important; }
 
-    /* Header wraps; tag drops below the title instead of overflowing */
-    .ll-header { flex-wrap: wrap; gap: 12px; padding: 16px 18px; }
-    .ll-header h1 { font-size: 19px; }
-    .ll-header p  { font-size: 12.5px; }
-    .ll-header .ll-tag { margin-left: 0; order: 3; flex-basis: 100%; }
+    .ll-header { flex-wrap: wrap; gap: 6px; }
+    .ll-header .ll-status { margin-left: 0; flex-basis: 100%; }
 
-    /* Let images size to the viewport rather than a fixed desktop height */
     .upload-zone .gradio-image,
     .upload-zone [data-testid="image"] { min-height: 220px !important; }
 
-    /* Full-width, touch-friendly action buttons */
-    .primary-btn { width: 100% !important; padding: 13px 18px !important; }
-
-    /* Dropdown spans the column on mobile */
-    .viz-dropdown-row .gradio-dropdown { max-width: 100% !important; }
-}
-
-@media (max-width: 480px) {
-    .gradio-container { padding: 10px 10px 28px !important; }
-    .ll-header .ll-mark { width: 38px; height: 38px; }
-    .ll-header h1 { font-size: 17px; }
+    .primary-btn, .secondary-btn { width: 100% !important; padding: 12px 16px !important; }
 }
 """
 
 
-HERO_HTML = """
+def build_header_html():
+    """Header text reports which models are actually loaded."""
+    parts = []
+    if cls_model is not None:
+        parts.append("DenseNet-121 classifier")
+    if seg_model is not None:
+        parts.append("U-Net segmentation")
+    status = f"Models: {' + '.join(parts)}" if parts else "No model loaded"
+    return f"""
 <div class="ll-header">
-  <span class="ll-mark">
-    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 4v7"/>
-      <path d="M8.5 8.5c0 4-2.5 5-3.5 7-0.8 1.6-0.5 4 1.5 4 1.8 0 2.5-1.4 2.5-3.2V11c0-1.4-1-2.5-2.5-2.5z"/>
-      <path d="M15.5 8.5c0 4 2.5 5 3.5 7 0.8 1.6 0.5 4-1.5 4-1.8 0-2.5-1.4-2.5-3.2V11c0-1.4 1-2.5 2.5-2.5z"/>
-    </svg>
-  </span>
-  <div>
-    <h1>LungLens</h1>
-    <p>Multi-task chest X-ray classification and region segmentation</p>
-  </div>
-  <span class="ll-tag">Research use only</span>
+  <h1>LungLens</h1>
+  <span class="ll-sub">Chest X-ray classification and region overlay</span>
+  <span class="ll-status">{status} &middot; Research use only</span>
 </div>
 """
 
@@ -990,36 +1094,40 @@ def reset_view():
     )
 
 
-ll_theme = gr.themes.Soft(
+# Gradio 6 requires Font objects here; plain strings crash launch() with
+# AttributeError inside the built-in theme comparison.
+ll_theme = gr.themes.Base(
     primary_hue="blue",
     neutral_hue="slate",
-    font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+    font=[gr.themes.Font("Segoe UI"), gr.themes.Font("system-ui"),
+          gr.themes.Font("sans-serif")],
 )
 
 with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
-    gr.HTML(HERO_HTML)
+    gr.HTML(build_header_html())
 
-    with gr.Tab("Diagnostic Inference"):
+    with gr.Tab("Analysis"):
         # Single always-visible dashboard: input on the left, results on the
         # right. Container visibility is never toggled during an event, which is
         # what previously aborted the result stream and left the UI spinning.
         with gr.Row(equal_height=False):
             with gr.Column(scale=1, elem_classes="custom-panel"):
-                gr.Markdown("### Upload Scan")
+                gr.Markdown("### Input")
                 input_img = gr.Image(type="pil", label="", elem_classes="upload-zone", height=340)
-                target_viz = gr.Dropdown(choices=CLASSES, value="Pneumonia",
-                                         label="Target Visualization Class")
-                gr.HTML("<p class='disclaimer-note'>The segmentation overlay highlights the detected region of interest "
-                        "for the selected class, helping clinicians localise abnormalities. "
-                        "This tool is not a substitute for professional medical diagnosis.</p>")
+                target_viz = gr.Dropdown(choices=[AUTO_OVERLAY] + CLASSES, value=AUTO_OVERLAY,
+                                         label="Overlay class")
+                gr.HTML("<p class='disclaimer-note'>The heatmap shows where the model focused "
+                        "for the predicted class, or a specific class if one is selected. "
+                        "For research use only; not a substitute for professional "
+                        "medical diagnosis.</p>")
                 with gr.Row():
-                    predict_btn = gr.Button("Diagnose", variant="primary", elem_classes="primary-btn")
-                    reset_btn   = gr.Button("Clear", elem_classes="primary-btn")
+                    predict_btn = gr.Button("Analyze", variant="primary", elem_classes="primary-btn")
+                    reset_btn   = gr.Button("Clear", elem_classes="secondary-btn")
 
             with gr.Column(scale=1, elem_classes="custom-panel"):
                 gr.Markdown("### Results")
-                output_heatmap = gr.Image(label="Segmented Region of Interest", value=None, height=340)
-                output_label = gr.Label(label="Class Confidence", num_top_classes=4,
+                output_heatmap = gr.Image(label="Attention heatmap", value=None, height=340)
+                output_label = gr.Label(label="Class confidence", num_top_classes=4,
                                         elem_classes="conf-label")
                 output_markdown = gr.Markdown()
 
@@ -1028,23 +1136,23 @@ with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
         reset_btn.click(fn=reset_view, inputs=[],
                         outputs=[input_img, output_heatmap, output_markdown, output_label])
 
-    with gr.Tab("Model Training"):
+    with gr.Tab("Training"):
         with gr.Column(elem_classes="custom-panel"):
-            gr.Markdown("### Train Segmentation Model (Multi-Task U-Net)\nAdjust parameters to fine-tune the model on your dataset. "
-                        "Logs and status refresh automatically while training runs.")
+            gr.Markdown("### Train the multi-task U-Net\nSet parameters and start a run. "
+                        "Status and logs update automatically while training is active.")
             with gr.Row():
                 with gr.Column(scale=1):
-                    num_samples_slider = gr.Slider(100, 10000, value=1000, step=100, label="Dataset Size")
+                    num_samples_slider = gr.Slider(100, 10000, value=1000, step=100, label="Dataset size")
                     epochs_slider      = gr.Slider(1, 20, value=5, step=1, label="Epochs")
-                    batch_size_slider  = gr.Slider(8, 64, value=16, step=8, label="Batch Size")
-                    lr_input           = gr.Number(value=0.0001, label="Learning Rate", precision=6)
-                    train_btn          = gr.Button("Start Training", variant="primary", elem_classes="primary-btn")
+                    batch_size_slider  = gr.Slider(8, 64, value=16, step=8, label="Batch size")
+                    lr_input           = gr.Number(value=0.0001, label="Learning rate", precision=6)
+                    train_btn          = gr.Button("Start training", variant="primary", elem_classes="primary-btn")
                     status_box         = gr.Textbox(value=training_status, label="Status",
                                                     interactive=False, elem_classes="status-pill")
                 with gr.Column(scale=2):
-                    log_box     = gr.Textbox(value="", label="Terminal Logs", interactive=False,
+                    log_box     = gr.Textbox(value="", label="Training log", interactive=False,
                                              lines=18, max_lines=30, autoscroll=True)
-                    refresh_btn = gr.Button("Refresh Logs", elem_classes="primary-btn")
+                    refresh_btn = gr.Button("Refresh", elem_classes="secondary-btn")
 
         # Auto-refresh logs/status while training runs. The Timer starts inactive
         # and is only switched on for the duration of a run; an always-on Timer
@@ -1062,4 +1170,4 @@ with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    demo.queue().launch(server_name="127.0.0.1", server_port=port, share=False, css=apple_css)
+    demo.queue().launch(server_name="127.0.0.1", server_port=port, share=False, css=ll_css)
