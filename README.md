@@ -23,7 +23,28 @@ It runs a hybrid of two models. A **DenseNet-121** classifier makes the diagnost
 
 ---
 
-## Model Architecture
+## How Inference Works
+
+Each request runs the hybrid pipeline:
+
+```
+Upload -> resize 224x224, ImageNet normalise
+   |
+   |-- DenseNet-121 --> softmax --> class probabilities   (the prediction)
+   |
+   |-- top prob < 60%? --> report "Uncertain"
+   |
+   |-- Grad-CAM on DenseNet for the visualised class --> attention map
+   |        (Normal prediction -> map the most likely ABNORMAL class instead)
+   |
+   +-- render full-resolution heatmap
+            + crisp region outline only for a confident abnormal finding
+```
+
+If the DenseNet checkpoint is missing, the U-Net's classifier head and its
+segmentation mask are used as the fallback for both prediction and overlay.
+
+### Multi-Task U-Net (segmentation and fallback)
 
 ```
 Input (3 x 224 x 224)
@@ -32,7 +53,7 @@ Input (3 x 224 x 224)
         |         MaxPool2d between each block
         |
    [ Bottleneck (512 channels) ]
-        |-- AdaptiveAvgPool -> Linear(512, 4) -> class logits (4)
+        |-- AdaptiveAvgPool -> Dropout(0.3) -> Linear(512, 4) -> class logits (4)
         |-- ConvTranspose2d x 3 with skip connections
         |
    [ Decoder ]    Upsample 28 -> 56 -> 112 -> 224 with encoder skips
@@ -42,14 +63,19 @@ Input (3 x 224 x 224)
    Segmentation masks (4 x 224 x 224)
 ```
 
-Loss:
+Loss during U-Net training:
 
 ```
-Total Loss = CrossEntropyLoss(class) + 2.0 * DiceBCELoss(mask)
+Total Loss = CrossEntropyLoss(class, class_weights) + 2.0 * DiceBCELoss(mask)
 DiceBCELoss = BCE(pred, target) + DiceLoss(pred, target)
 ```
 
-The best checkpoint (highest validation Dice) is saved as `chest_segmentation_model.pth`.
+`class_weights` are inverse-frequency weights normalised to mean 1.0. The best
+checkpoint (highest validation Dice) is saved as `chest_segmentation_model.pth`.
+
+> Note: training in the app trains the U-Net only. The DenseNet-121 classifier
+> (`chest_model_4class.pth`) that drives predictions is a pre-trained checkpoint
+> and is not retrained here.
 
 ---
 
@@ -101,43 +127,54 @@ python app.py
 
 Then open [http://127.0.0.1:7860](http://127.0.0.1:7860). To use a different port, set the `PORT` environment variable, for example `PORT=8000 python app.py`.
 
-On startup the app loads `chest_segmentation_model.pth` if present, otherwise it falls back to `chest_model_4class.pth`.
+On startup the app loads both `chest_model_4class.pth` (the DenseNet classifier) and `chest_segmentation_model.pth` (the U-Net) if present, and warms each one up. The header shows which models loaded.
 
 ---
 
 ## How to Use
 
-### Diagnostic Inference
+### Analysis
 
-1. Open the Diagnostic Inference tab.
+1. Open the Analysis tab.
 2. Upload a chest X-ray (PNG, JPG, or JPEG).
-3. Select the Target Visualization Class, the class whose segmentation mask you want to inspect.
-4. Click Diagnose. The results panel shows:
-   - Segmented Region of Interest: the scan with a blue overlay and contour outline of the detected region.
-   - Class Confidence: native probability bars for all four classes.
-   - Diagnostic Findings: the top predicted class and a clinical description.
+3. Leave Overlay class on "Auto (predicted class)" to visualise the prediction, or pick a specific class to inspect.
+4. Click Analyze. The results panel shows:
+   - Attention heatmap: the scan with a Grad-CAM heatmap, plus a region outline when the finding is a confident abnormality.
+   - Class confidence: probability bars for all four classes.
+   - A findings summary: the predicted class (or Uncertain) and a plain-language description of what the heatmap represents.
 5. Click Clear to reset the inputs and outputs.
 
-### Model Training
+### Training
 
-1. Open the Model Training tab.
+1. Open the Training tab.
 2. Adjust the hyperparameters (see the guide below).
-3. Click Start Training. Training runs in a background thread.
-4. Logs and status refresh automatically while the run is active. A manual Refresh Logs button is also available.
-5. The best model by validation Dice is saved as `chest_segmentation_model.pth` and loaded automatically when training finishes.
+3. Click Start training. Training runs in a background thread.
+4. Status and logs refresh automatically while the run is active. A manual Refresh button is also available.
+5. The best U-Net by validation Dice is saved as `chest_segmentation_model.pth` and published for inference automatically when training finishes.
 
 ---
 
 ## How to Train Effectively
 
-### The training pipeline
+Training in the app improves the **U-Net** (segmentation quality and the fallback classifier). It does not change the DenseNet-121 that drives predictions in the Analysis tab.
+
+### Step by step
+
+1. Ensure your Kaggle API key is at `~/.kaggle/kaggle.json`. The datasets download automatically on the first run.
+2. Open the Training tab and set Dataset size, Epochs, Batch size, and Learning rate (see the recommended values below).
+3. Click Start training. The datasets are collected, split into train and validation (stratified when class counts allow), and pseudo-masks are generated on the fly.
+4. Watch Status and the log panel. Each epoch reports train and validation accuracy and Dice, plus the current learning rate.
+5. When the run finishes, the best checkpoint by validation Dice is saved to `chest_segmentation_model.pth` and published to the live model, so the Analysis tab uses it immediately (no restart needed).
+
+### What happens under the hood
 
 Training is weakly supervised, so no pixel annotations are needed:
 
 1. **Pseudo-mask generation.** For each non-normal image, the grayscale scan is contrast-equalised (CLAHE), thresholded with Otsu, restricted to an elliptical lung-field region, and cleaned with morphological opening and closing. This produces an anatomically plausible target for the segmentation head.
 2. **Aligned augmentation.** Only photometric augmentation (brightness and contrast jitter) is applied during training. Geometric transforms are omitted because the pseudo-mask is derived from the original image, so rotating or flipping the input would misalign it with its target.
-3. **Joint optimisation.** Classification loss (Cross-Entropy) and segmentation loss (Dice-BCE) are combined with a 1:2 weighting and optimised together.
+3. **Class-weighted joint optimisation.** Classification loss (Cross-Entropy with inverse-frequency class weights) and segmentation loss (Dice-BCE) are combined with a 1:2 weighting and optimised together. Dropout on the classification head reduces overfitting to the majority classes.
 4. **Stability.** Gradients are clipped at `max_norm = 1.0`, NaN and Inf batches are skipped, and ReduceLROnPlateau halves the learning rate when validation Dice plateaus.
+5. **Safe publishing.** Training builds a local network and only swaps it into the live model after the run ends, so inference never sees a half-trained model.
 
 ### Recommended hyperparameters
 
@@ -278,15 +315,20 @@ LungLens/
 
 | Class or function | Purpose |
 |-------------------|---------|
-| `MultiTaskUNet` | Encoder-decoder with a classification head. Returns (class logits, segmentation mask). |
+| `CNNModel` | DenseNet-121 classifier. The primary prediction model. |
+| `MultiTaskUNet` | Encoder-decoder returning (class logits, segmentation mask). Segmentation and fallback. |
 | `DoubleConv` | Double convolution block with BatchNorm and ReLU. |
 | `DiceBCELoss` | Combined Dice and Binary Cross-Entropy loss for segmentation. |
 | `dice_coefficient` | Measures segmentation overlap, 0 to 1. |
 | `generate_pseudo_mask` | Builds an anatomically informed pseudo-mask from a grayscale scan. |
 | `SegmentationDataset` | Returns (image, pseudo-mask, label) with masks generated on the fly. |
-| `GradCAM` | Extracts attention heatmaps from DenseNet for the fallback path. |
-| `predict_image` | Inference: runs the U-Net or fallback and renders the overlay. |
-| `run_training_thread` | Background training loop with per-batch logging. |
+| `GradCAM` | Extracts Grad-CAM attention heatmaps from the DenseNet. |
+| `warm_up_model` | Runs a dummy forward pass so the first real inference is fast. |
+| `load_models_from_disk` | Loads and warms up both checkpoints; returns (seg_model, cls_model). |
+| `build_heatmap` | Blends a translucent, floor-suppressed Grad-CAM heatmap at full resolution. |
+| `clean_region` / `outline_region` | Threshold, despeckle, and outline a confident region of interest. |
+| `predict_image` | Inference: classify with the DenseNet, visualise with Grad-CAM, apply gating. |
+| `run_training_thread` | Background U-Net training loop with per-batch logging and safe publishing. |
 
 ---
 
