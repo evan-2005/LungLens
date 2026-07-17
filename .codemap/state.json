@@ -1,171 +1,473 @@
 {
-  "updated_at": "2026-07-07T17:22:17.140376+08:00",
+  "updated_at": "2026-07-18T07:22:15.3735662+08:00",
   "file_count": 99,
-  "hubs": [
-    "data\\batch_download_zips.py",
-    "chestist-smart-app\\src\\components\\PatientProvider.tsx"
+  "hubs": null,
+  "importers": {},
+  "imports": {},
+  "recent_events": [
+    {
+      "time": "2026-07-17T20:29:08.2054035+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1408,
+      "size_delta": -63022
+    },
+    {
+      "time": "2026-07-17T20:29:08.2110432+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1414,
+      "delta": 1414,
+      "size_delta": 63381,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T20:29:20.5377823+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1414,
+      "size_delta": -63381
+    },
+    {
+      "time": "2026-07-17T20:29:20.542093+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1413,
+      "delta": 1413,
+      "size_delta": 63368,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T20:30:12.101875+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1413,
+      "size_delta": -63368
+    },
+    {
+      "time": "2026-07-17T20:30:12.106508+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1515,
+      "delta": 1515,
+      "size_delta": 67763,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T20:32:11.545247+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1515,
+      "size_delta": -67763
+    },
+    {
+      "time": "2026-07-17T20:32:11.5496552+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1475,
+      "delta": 1475,
+      "size_delta": 66475,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T20:32:39.9149111+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1475,
+      "size_delta": -66475
+    },
+    {
+      "time": "2026-07-17T20:32:39.9213711+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1478,
+      "delta": 1478,
+      "size_delta": 66639,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T20:33:27.641451+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1478,
+      "size_delta": -66639
+    },
+    {
+      "time": "2026-07-17T20:33:27.6477652+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1499,
+      "delta": 1499,
+      "size_delta": 67526,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T20:52:34.6921969+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1499,
+      "size_delta": -67526
+    },
+    {
+      "time": "2026-07-17T20:52:34.6991334+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1504,
+      "delta": 1504,
+      "size_delta": 68019,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T20:52:58.5297142+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1504,
+      "size_delta": -68019
+    },
+    {
+      "time": "2026-07-17T20:52:58.5350287+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1505,
+      "delta": 1505,
+      "size_delta": 68068,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:44:01.3738705+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1505,
+      "size_delta": -68068
+    },
+    {
+      "time": "2026-07-17T21:44:01.3850041+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1517,
+      "delta": 1517,
+      "size_delta": 68615,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:46:12.0889771+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1517,
+      "size_delta": -68615
+    },
+    {
+      "time": "2026-07-17T21:46:12.100827+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1623,
+      "delta": 1623,
+      "size_delta": 73114,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:46:54.3382192+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1623,
+      "size_delta": -73114
+    },
+    {
+      "time": "2026-07-17T21:46:54.3488373+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1623,
+      "delta": 1623,
+      "size_delta": 73125,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:47:09.8455673+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1623,
+      "size_delta": -73125
+    },
+    {
+      "time": "2026-07-17T21:47:09.8575563+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1647,
+      "delta": 1647,
+      "size_delta": 74562,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:47:21.8236416+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1647,
+      "size_delta": -74562
+    },
+    {
+      "time": "2026-07-17T21:47:21.8382165+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1653,
+      "delta": 1653,
+      "size_delta": 74809,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:48:06.6266535+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1653,
+      "size_delta": -74809
+    },
+    {
+      "time": "2026-07-17T21:48:06.6362297+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1658,
+      "delta": 1658,
+      "size_delta": 75125,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:48:16.9538394+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1658,
+      "size_delta": -75125
+    },
+    {
+      "time": "2026-07-17T21:48:16.9600654+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1658,
+      "delta": 1658,
+      "size_delta": 75144,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:48:29.0461007+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1658,
+      "size_delta": -75144
+    },
+    {
+      "time": "2026-07-17T21:48:29.0525219+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1660,
+      "delta": 1660,
+      "size_delta": 75262,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:49:09.3156864+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1660,
+      "size_delta": -75262
+    },
+    {
+      "time": "2026-07-17T21:49:09.3266004+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1667,
+      "delta": 1667,
+      "size_delta": 75758,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:49:39.6701145+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1667,
+      "size_delta": -75758
+    },
+    {
+      "time": "2026-07-17T21:49:39.6793071+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1678,
+      "delta": 1678,
+      "size_delta": 76412,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:49:57.0027352+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1678,
+      "size_delta": -76412
+    },
+    {
+      "time": "2026-07-17T21:49:57.0147768+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1689,
+      "delta": 1689,
+      "size_delta": 77048,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:50:42.165216+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1689,
+      "size_delta": -77048
+    },
+    {
+      "time": "2026-07-17T21:50:42.173897+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1698,
+      "delta": 1698,
+      "size_delta": 77439,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:51:10.5650695+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1698,
+      "size_delta": -77439
+    },
+    {
+      "time": "2026-07-17T21:51:10.5739679+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1705,
+      "delta": 1705,
+      "size_delta": 78084,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-17T21:51:30.6829543+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1705,
+      "size_delta": -78084
+    },
+    {
+      "time": "2026-07-17T21:51:30.6927791+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1706,
+      "delta": 1706,
+      "size_delta": 78166,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-18T07:21:02.2578107+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1706,
+      "size_delta": -78166
+    },
+    {
+      "time": "2026-07-18T07:21:02.2662115+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1711,
+      "delta": 1711,
+      "size_delta": 78386,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-18T07:22:08.3517146+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1711,
+      "size_delta": -78386
+    },
+    {
+      "time": "2026-07-18T07:22:08.360666+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1716,
+      "delta": 1716,
+      "size_delta": 78634,
+      "dirty": true
+    },
+    {
+      "time": "2026-07-18T07:22:15.2406868+08:00",
+      "op": "REMOVE",
+      "path": "app.py",
+      "lang": "python",
+      "delta": -1716,
+      "size_delta": -78634
+    },
+    {
+      "time": "2026-07-18T07:22:15.2572885+08:00",
+      "op": "CREATE",
+      "path": "app.py",
+      "lang": "python",
+      "lines": 1716,
+      "delta": 1716,
+      "size_delta": 78638,
+      "dirty": true
+    }
   ],
-  "importers": {
-    "app.py": [
-      "debug_training.py",
-      "test_gradcam.py"
-    ],
-    "chestist-smart-app\\src\\components\\App.tsx": [
-      "chestist-smart-app\\src\\index.js"
-    ],
-    "chestist-smart-app\\src\\components\\DropDown\\DropDown.module.scss": [
-      "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx": [
-      "chestist-smart-app\\src\\components\\DropDown\\__tests__\\DropDown.test.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\FHIRClient.tsx": [
-      "chestist-smart-app\\src\\components\\App.tsx",
-      "chestist-smart-app\\src\\components\\PatientProvider.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\Header\\Header.module.scss": [
-      "chestist-smart-app\\src\\components\\Header\\Header.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\Header\\Header.tsx": [
-      "chestist-smart-app\\src\\components\\Header\\__tests__\\Header.test.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\Navigation\\Navigation.module.scss": [
-      "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx": [
-      "chestist-smart-app\\src\\components\\Navigation\\__tests__\\Navigation.test.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\PatientProvider.tsx": [
-      "chestist-smart-app\\src\\components\\App.tsx",
-      "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx",
-      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx": [
-      "chestist-smart-app\\src\\components\\App.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.module.scss": [
-      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx": [
-      "chestist-smart-app\\src\\components\\PatientSnapshot\\__tests__\\PatientSnapshot.test.tsx"
-    ],
-    "chestist-smart-app\\src\\logo.svg": [
-      "chestist-smart-app\\src\\components\\App.tsx"
-    ],
-    "chestist-smart-app\\src\\styles\\index.scss": [
-      "chestist-smart-app\\src\\index.js"
-    ],
-    "chestist-smart-app\\src\\utils\\ConfigManager.js": [
-      "chestist-smart-app\\src\\utils\\config.test.js",
-      "chestist-smart-app\\src\\utils\\fhirExtract.js"
-    ],
-    "chestist-smart-app\\src\\utils\\fhirExtract.js": [
-      "chestist-smart-app\\src\\components\\App.tsx"
-    ],
-    "chestist-smart-app\\src\\utils\\fontawesomeLibrary.js": [
-      "chestist-smart-app\\src\\setupTests.ts",
-      "chestist-smart-app\\src\\index.js"
-    ],
-    "chestist-smart-app\\src\\utils\\patient.js": [
-      "chestist-smart-app\\src\\utils\\fhirExtract.js"
-    ],
-    "data\\batch_download_zips.py": [
-      "app.py",
-      "model\\DatasetGenerator.py",
-      "debug_training.py",
-      "model\\TrainerTester.py",
-      "model\\CNNModel.py",
-      "model\\Main.py"
-    ],
-    "model\\CNNModel.py": [
-      "model\\TrainerTester.py"
-    ],
-    "model\\DatasetGenerator.py": [
-      "model\\TrainerTester.py"
-    ],
-    "model\\TrainerTester.py": [
-      "model\\Main.py"
-    ]
-  },
-  "imports": {
-    "app.py": [
-      "data\\batch_download_zips.py"
-    ],
-    "chestist-smart-app\\src\\components\\App.tsx": [
-      "chestist-smart-app\\src\\logo.svg",
-      "chestist-smart-app\\src\\utils\\fhirExtract.js",
-      "chestist-smart-app\\src\\components\\FHIRClient.tsx",
-      "chestist-smart-app\\src\\components\\PatientProvider.tsx",
-      "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx": [
-      "chestist-smart-app\\src\\components\\DropDown\\DropDown.module.scss"
-    ],
-    "chestist-smart-app\\src\\components\\DropDown\\__tests__\\DropDown.test.tsx": [
-      "chestist-smart-app\\src\\components\\DropDown\\DropDown.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\Header\\Header.tsx": [
-      "chestist-smart-app\\src\\components\\Header\\Header.module.scss"
-    ],
-    "chestist-smart-app\\src\\components\\Header\\__tests__\\Header.test.tsx": [
-      "chestist-smart-app\\src\\components\\Header\\Header.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx": [
-      "chestist-smart-app\\src\\components\\Navigation\\Navigation.module.scss"
-    ],
-    "chestist-smart-app\\src\\components\\Navigation\\__tests__\\Navigation.test.tsx": [
-      "chestist-smart-app\\src\\components\\Navigation\\Navigation.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\PatientProvider.tsx": [
-      "chestist-smart-app\\src\\components\\FHIRClient.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\PatientRecord\\PatientRecord.tsx": [
-      "chestist-smart-app\\src\\components\\PatientProvider.tsx"
-    ],
-    "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx": [
-      "chestist-smart-app\\src\\components\\PatientProvider.tsx",
-      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.module.scss"
-    ],
-    "chestist-smart-app\\src\\components\\PatientSnapshot\\__tests__\\PatientSnapshot.test.tsx": [
-      "chestist-smart-app\\src\\components\\PatientSnapshot\\PatientSnapshot.tsx"
-    ],
-    "chestist-smart-app\\src\\index.js": [
-      "chestist-smart-app\\src\\components\\App.tsx",
-      "chestist-smart-app\\src\\styles\\index.scss",
-      "chestist-smart-app\\src\\utils\\fontawesomeLibrary.js"
-    ],
-    "chestist-smart-app\\src\\setupTests.ts": [
-      "chestist-smart-app\\src\\utils\\fontawesomeLibrary.js"
-    ],
-    "chestist-smart-app\\src\\utils\\config.test.js": [
-      "chestist-smart-app\\src\\utils\\ConfigManager.js"
-    ],
-    "chestist-smart-app\\src\\utils\\fhirExtract.js": [
-      "chestist-smart-app\\src\\utils\\patient.js",
-      "chestist-smart-app\\src\\utils\\ConfigManager.js"
-    ],
-    "debug_training.py": [
-      "app.py",
-      "data\\batch_download_zips.py"
-    ],
-    "model\\CNNModel.py": [
-      "data\\batch_download_zips.py"
-    ],
-    "model\\DatasetGenerator.py": [
-      "data\\batch_download_zips.py"
-    ],
-    "model\\Main.py": [
-      "model\\TrainerTester.py",
-      "data\\batch_download_zips.py"
-    ],
-    "model\\TrainerTester.py": [
-      "data\\batch_download_zips.py",
-      "model\\CNNModel.py",
-      "model\\DatasetGenerator.py"
-    ],
-    "test_gradcam.py": [
-      "app.py"
-    ]
-  },
-  "recent_events": null
+  "working_set": {
+    "files": {
+      "app.py": {
+        "path": "app.py",
+        "first_touch": "2026-07-18T07:22:15.3709654+08:00",
+        "last_touch": "2026-07-18T07:22:15.3709654+08:00",
+        "edit_count": 1,
+        "net_delta": 1716,
+        "is_hub": false,
+        "importers": 0
+      }
+    },
+    "started_at": "2026-07-17T19:51:36.9422316+08:00"
+  }
 }

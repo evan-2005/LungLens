@@ -1,6 +1,8 @@
 import os
 import glob
+import json
 import random
+import datetime
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -13,14 +15,20 @@ import numpy as np
 import cv2
 import gradio as gr
 import kagglehub
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from sklearn.metrics import (classification_report, f1_score, recall_score,
+                             confusion_matrix)
+import re
 import threading
 
 CLASSES = ["Normal", "Pneumonia", "Tuberculosis", "Covid-19"]
 NUM_CLASSES = len(CLASSES)
 model_path = "chest_model_4class.pth"
 seg_model_path = "chest_segmentation_model.pth"
+# Written at the end of every run so the UI can report the accuracy of the
+# classifier checkpoint that is actually loaded, instead of an unverifiable
+# claim. This describes chest_model_4class.pth (the served DenseNet).
+metrics_path = "chest_classifier_metrics.json"
 training_status = "Not Training"
 training_logs = []
 # Hybrid inference: the DenseNet checkpoint is a strong discriminative
@@ -29,6 +37,11 @@ training_logs = []
 # does the job it is actually good at.
 seg_model = None   # MultiTaskUNet: segmentation masks, fallback classifier
 cls_model = None   # DenseNet-121: primary classifier, Grad-CAM fallback
+# True only when the loaded seg_model is a fresh Grad-CAM-distilled DISEASE
+# segmentation model (recorded in the metrics file). Older checkpoints trained
+# on the brightness pseudo-mask trace anatomy, not disease, so inference must
+# not prefer them; this flag gates that preference.
+seg_disease_model = False
 model_lock = threading.Lock()  # Guards loads/swaps of the global models.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -42,6 +55,12 @@ IMG_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 VAL_SPLIT = 0.2
+# Three-way patient-grouped split: hold out a test set that is used only for the
+# final report, so the number shown is not the same set the checkpoint was
+# selected on. Fractions are of the whole; the remainder is training data.
+TEST_FRACTION = 0.15
+VAL_FRACTION = 0.15
+EARLY_STOP_PATIENCE = 4         # epochs without a macro-F1 gain before stopping
 SEG_LOSS_WEIGHT = 2.0
 OVERLAY_THRESHOLD = 0.45        # Grad-CAM maps are relative, threshold after normalising
 MASK_DISPLAY_THRESHOLD = 0.5    # U-Net masks are probabilities, threshold the raw sigmoid
@@ -51,6 +70,15 @@ HEATMAP_FLOOR = 0.35            # Hide diffuse low activation so healthy areas s
 MIN_REGION_AREA_FRAC = 0.003    # Drop overlay specks smaller than 0.3% of the image
 OVERLAY_COLOR = (0, 113, 227)  # RGB clinical blue used for the segmentation overlay
 AUTO_OVERLAY = "Auto (predicted class)"
+
+# Recommended run size for fine-tuning the DenseNet classifier. Use as much of
+# the ~11k-image pool as the machine can afford: the minority classes (TB ~6%,
+# Covid ~9%) only become well represented in the val/test folds at scale. Early
+# stopping means over-requesting epochs is cheap, so aim high and let it stop.
+RECOMMENDED_SAMPLES = 10000
+RECOMMENDED_EPOCHS = 20
+RECOMMENDED_BATCH = 16
+RECOMMENDED_LR = 1e-4
 
 
 def _normalize_transform():
@@ -230,14 +258,62 @@ class DiceBCELoss(nn.Module):
 
 
 def dice_coefficient(y_pred, y_true, smooth=1e-6):
+    """
+    Mean Dice over only the (sample, channel) pairs that actually contain a
+    region in either the prediction or the target. Averaging over *all* channels
+    (the old behaviour) handed a free 1.0 to every empty channel, so a model
+    predicting nothing still scored ~0.75 on a single-region-per-image target.
+    Restricting to present channels makes the score reflect real overlap.
+    """
     y_bin  = (y_pred > 0.5).float()
     inter  = (y_bin * y_true).sum(dim=(2, 3))
     union  = y_bin.sum(dim=(2, 3)) + y_true.sum(dim=(2, 3))
     dice   = (2.0 * inter + smooth) / (union + smooth)
-    result = dice.mean().item()
-    if torch.isnan(torch.tensor(result)) or torch.isinf(torch.tensor(result)):
+    present = union > 0
+    if present.any():
+        result = dice[present].mean().item()
+    else:
+        # No region anywhere in pred or target: a correct empty prediction.
+        result = 1.0
+    if np.isnan(result) or np.isinf(result):
         return 0.0
     return result
+
+
+# Training metrics persistence
+def save_training_metrics(metrics):
+    """Record how the saved checkpoint scored. Never raises, a failure to write
+    the report must not fail an otherwise successful run."""
+    try:
+        with open(metrics_path, "w", encoding="utf-8") as fh:
+            json.dump(metrics, fh, indent=2)
+        return True
+    except OSError as e:
+        print(f"Warning: could not write {metrics_path}: {e}")
+        return False
+
+
+def load_training_metrics():
+    """Return the recorded metrics for the checkpoint on disk, or None.
+
+    Returns None when the file is missing, unreadable, or older than the
+    checkpoint it claims to describe, so a stale report is never presented as
+    the accuracy of a newer model.
+    """
+    if not os.path.exists(metrics_path):
+        return None
+    try:
+        with open(metrics_path, encoding="utf-8") as fh:
+            metrics = json.load(fh)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"Warning: could not read {metrics_path}: {e}")
+        return None
+    if not isinstance(metrics, dict) or "val_acc" not in metrics:
+        return None
+    if (os.path.exists(model_path)
+            and os.path.getmtime(model_path) > os.path.getmtime(metrics_path) + 1):
+        return None
+    return metrics
 
 
 # Grad-CAM
@@ -290,54 +366,350 @@ class GradCAM:
 
 
 # Data collection
+IMAGE_EXTS = (".png", ".jpg", ".jpeg")
+
+
 def get_dataset_paths():
     tb  = kagglehub.dataset_download("tawsifurrahman/tuberculosis-tb-chest-xray-dataset")
     pn  = kagglehub.dataset_download("pcbreviglieri/pneumonia-xray-images")
     cov = kagglehub.dataset_download("raddar/ricord-covid19-xray-positive-tests")
     return tb, pn, cov
 
-def collect_data():
+
+def _label_from_folder(rel_parts, folder_map):
+    """
+    Map an image to a class by the name of the class sub-folder it sits in,
+    not by substring-matching the whole absolute path. The old approach only
+    worked because the dataset directory names happened to contain the class
+    words (e.g. every file under 'pneumonia-xray-images' matched 'pneumonia'),
+    and it silently mislabels the moment a dataset is moved or renamed. Here the
+    match is against the directory segments *relative to the dataset root*.
+    Returns a class index or None if no folder matches.
+    """
+    for part in rel_parts:
+        key = part.lower()
+        if key in folder_map:
+            return folder_map[key]
+    return None
+
+
+def _patient_group(source, filename):
+    """
+    Derive a stable patient/study id so all images of one patient stay on the
+    same side of a train/val/test split. These datasets have many images per
+    patient (RICORD Covid has up to 33), so an image-level split leaks the
+    patient across sets and inflates validation scores. Each known filename
+    scheme is handled; anything unrecognised falls back to its own filename so
+    it is at worst treated as a distinct patient.
+    """
+    stem = os.path.splitext(filename)[0]
+    m = re.search(r"person\d+", stem, re.IGNORECASE)          # pneumonia: person123_bacteria_4
+    if m:
+        return f"{source}:{m.group(0).lower()}"
+    m = re.match(r"(\d+-\d+)_", stem)                          # RICORD covid: 419639-000025_...
+    if m:
+        return f"{source}:{m.group(1)}"
+    m = re.match(r"(IM-\d+)", stem)                            # pneumonia normal: IM-0001-0001
+    if m:
+        return f"{source}:{m.group(1)}"
+    return f"{source}:{stem}"
+
+
+# Class folder -> label, per dataset. Note the pneumonia disease folder is
+# literally named "opacity", which no substring rule for "pneumonia" would ever
+# match; this is exactly why folder-relative labelling is required.
+_TB_FOLDERS   = {"normal": 0, "tuberculosis": 2}
+_PNEU_FOLDERS = {"normal": 0, "opacity": 1, "pneumonia": 1}
+_CUSTOM_FOLDERS = {"normal": 0, "pneumonia": 1, "opacity": 1,
+                   "tuberculosis": 2, "tb": 2, "covid": 3, "covid-19": 3}
+
+
+def collect_dataset():
+    """
+    Walk every dataset and return one record per image as parallel lists:
+    (paths, labels, groups, sources). `groups` feeds a patient-grouped split;
+    `sources` lets us report per-source accuracy as a confounding probe, since
+    each disease comes from exactly one dataset and a model can otherwise score
+    well by recognising the scanner rather than the pathology.
+    """
     tb_base, pn_base, cov_base = get_dataset_paths()
-    paths, labels = [], []
+    paths, labels, groups, sources = [], [], [], []
+
+    def add(f, label, source):
+        paths.append(f)
+        labels.append(label)
+        sources.append(source)
+        groups.append(_patient_group(source, os.path.basename(f)))
 
     for f in glob.glob(os.path.join(tb_base, "**", "*.*"), recursive=True):
-        if not f.lower().endswith(('.png','.jpg','.jpeg')): continue
-        fl = f.lower()
-        if 'normal' in fl:       paths.append(f); labels.append(0)
-        elif 'tuberculosis' in fl or 'tb' in fl: paths.append(f); labels.append(2)
+        if not f.lower().endswith(IMAGE_EXTS):
+            continue
+        rel = os.path.relpath(f, tb_base).split(os.sep)
+        label = _label_from_folder(rel, _TB_FOLDERS)
+        if label is not None:
+            add(f, label, "tb_ds")
 
     for f in glob.glob(os.path.join(pn_base, "**", "*.*"), recursive=True):
-        if not f.lower().endswith(('.png','.jpg','.jpeg')): continue
-        fl = f.lower()
-        if 'normal' in fl:    paths.append(f); labels.append(0)
-        elif 'pneumonia' in fl: paths.append(f); labels.append(1)
+        if not f.lower().endswith(IMAGE_EXTS):
+            continue
+        rel = os.path.relpath(f, pn_base).split(os.sep)
+        label = _label_from_folder(rel, _PNEU_FOLDERS)
+        if label is not None:
+            add(f, label, "pneu_ds")
 
+    # RICORD is an all-positive Covid set. Guard against the non-image sidecar
+    # files (.csv/.complete) with the extension filter, and require the image to
+    # live under the study directory so a stray file in the root is not labelled.
     for f in glob.glob(os.path.join(cov_base, "**", "*.*"), recursive=True):
-        if not f.lower().endswith(('.png','.jpg','.jpeg')): continue
-        paths.append(f); labels.append(3)
+        if not f.lower().endswith(IMAGE_EXTS):
+            continue
+        if "midrc" not in f.lower():
+            continue
+        add(f, 3, "covid_ds")
 
     custom_base = os.path.join(os.path.dirname(__file__), "custom_dataset")
     if os.path.exists(custom_base):
         for f in glob.glob(os.path.join(custom_base, "**", "*.*"), recursive=True):
-            if not f.lower().endswith(('.png','.jpg','.jpeg')): continue
-            fl = f.lower()
-            if 'normal' in fl:      paths.append(f); labels.append(0)
-            elif 'pneumonia' in fl: paths.append(f); labels.append(1)
-            elif 'tb' in fl or 'tuberculosis' in fl: paths.append(f); labels.append(2)
-            elif 'covid' in fl:     paths.append(f); labels.append(3)
+            if not f.lower().endswith(IMAGE_EXTS):
+                continue
+            rel = os.path.relpath(f, custom_base).split(os.sep)
+            label = _label_from_folder(rel, _CUSTOM_FOLDERS)
+            if label is not None:
+                add(f, label, "custom")
 
+    if not paths:
+        print("WARNING: No images found in datasets!")
+    return paths, labels, groups, sources
+
+
+def collect_data():
+    """Backward-compatible 2-tuple wrapper (paths, labels) for tooling that does
+    not need group/source metadata (e.g. debug_training.py)."""
+    paths, labels, _, _ = collect_dataset()
     combined = list(zip(paths, labels))
     if not combined:
-        print("WARNING: No images found in datasets!")
         return [], []
     random.shuffle(combined)
     paths, labels = zip(*combined)
     return list(paths), list(labels)
 
 
+# Training helpers
+def stratified_subsample(paths, labels, groups, sources, num_samples, seed=42):
+    """Take a class-balanced-in-proportion subsample instead of head-slicing a
+    shuffled list, so the minority-class counts do not swing run to run."""
+    n = len(paths)
+    if num_samples >= n:
+        return paths, labels, groups, sources
+    idx = np.arange(n)
+    # A stratified split gives a subset whose class proportions match the whole.
+    keep_idx, _ = train_test_split(
+        idx, train_size=num_samples, random_state=seed,
+        stratify=labels if len(set(labels)) > 1 else None)
+    keep = set(keep_idx.tolist())
+    sel = [i for i in range(n) if i in keep]
+    return ([paths[i] for i in sel], [labels[i] for i in sel],
+            [groups[i] for i in sel], [sources[i] for i in sel])
+
+
+def _group_split(indices, labels, groups, test_size, seed):
+    """Split an index array by group so no group spans both sides. Falls back to
+    a plain stratified split if there is only one group per side is impossible."""
+    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+    sub_labels = [labels[i] for i in indices]
+    sub_groups = [groups[i] for i in indices]
+    a_idx, b_idx = next(gss.split(indices, sub_labels, sub_groups))
+    return ([indices[i] for i in a_idx], [indices[i] for i in b_idx])
+
+
+def patient_grouped_split(paths, labels, groups, sources, seed=42):
+    """
+    Patient-grouped train/val/test split. Test is carved off first, then val
+    from the remainder, always along group boundaries so a patient's images
+    never appear in more than one split.
+    """
+    all_idx = list(range(len(paths)))
+    trainval_idx, test_idx = _group_split(all_idx, labels, groups, TEST_FRACTION, seed)
+    # val fraction is relative to the remaining trainval pool.
+    val_rel = VAL_FRACTION / (1.0 - TEST_FRACTION)
+    train_idx, val_idx = _group_split(trainval_idx, labels, groups, val_rel, seed)
+
+    def gather(idx):
+        return ([paths[i] for i in idx], [labels[i] for i in idx],
+                [sources[i] for i in idx])
+    return gather(train_idx), gather(val_idx), gather(test_idx)
+
+
+def build_transforms():
+    """
+    Training augmentation is now geometric as well as photometric. Dropping the
+    pseudo-mask target removed the alignment constraint that previously forbade
+    rotation/flip/crop, so we can use them. RandomResizedCrop + rotation + flip +
+    jitter + mild blur/noise attack the resolution and scanner cues that
+    otherwise let the model tell the diseases apart by their source dataset
+    rather than by pathology.
+    """
+    train_tf = transforms.Compose([
+        transforms.Resize((IMG_SIZE + 32, IMG_SIZE + 32)),
+        transforms.RandomResizedCrop(IMG_SIZE, scale=(0.75, 1.0), ratio=(0.9, 1.1)),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2),
+        transforms.RandomApply([transforms.GaussianBlur(3)], p=0.2),
+        transforms.ToTensor(),
+        _normalize_transform(),
+    ])
+    eval_tf = transforms.Compose([
+        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.ToTensor(),
+        _normalize_transform(),
+    ])
+    return train_tf, eval_tf
+
+
+def evaluate_classifier(net, loader):
+    """Run a classifier over a loader and return (y_true, y_pred) as lists."""
+    net.eval()
+    y_true, y_pred = [], []
+    with torch.no_grad():
+        for inputs, target_labels in loader:
+            inputs = inputs.to(device)
+            logits = net(inputs)
+            preds = logits.argmax(1).cpu().tolist()
+            y_pred.extend(preds)
+            y_true.extend(target_labels.tolist())
+    return y_true, y_pred
+
+
+def per_source_accuracy(y_true, y_pred, sources):
+    """
+    Accuracy broken down by originating dataset. Because each disease comes from
+    a single source, a large gap here (especially for Normal, which spans two
+    sources) is a signal the model is keying on the scanner, not the pathology.
+    """
+    out = {}
+    by_src = {}
+    for t, p, s in zip(y_true, y_pred, sources):
+        by_src.setdefault(s, []).append(t == p)
+    for s, hits in by_src.items():
+        out[s] = {"acc": 100.0 * sum(hits) / len(hits), "n": len(hits)}
+    return out
+
+
+# Segmentation via Grad-CAM distillation
+def gradcam_soft_mask(cls_net, img_tensor, class_idx):
+    """
+    A soft disease-localisation mask in [0, 1] at IMG_SIZE, taken from the
+    classifier's Grad-CAM for the given class. This is the segmentation *target*:
+    it marks the lung region that actually drove the class score, which is what
+    the pseudo-mask never did. Returns a float32 array (IMG_SIZE, IMG_SIZE).
+    """
+    layer = get_gradcam_layer(cls_net)
+    cam = GradCAM(cls_net, layer)
+    t = img_tensor.clone().detach().to(device).requires_grad_(True)
+    heat = cam.generate_heatmap(t, class_idx)   # already normalised to [0,1], 224x224
+    return heat.astype(np.float32)
+
+
+def build_gradcam_targets(cls_net, paths, labels, eval_tf, cap, log):
+    """
+    Precompute Grad-CAM disease targets once (Normal -> all-zero mask), so the
+    U-Net can then be trained over several epochs without paying the per-image
+    backward pass every time. Bounded by `cap` because Grad-CAM on CPU is slow.
+    The pool is shuffled before the cap is applied, otherwise the head would be
+    dominated by whichever dataset was concatenated first and the targets would
+    lack class variety.
+    """
+    order = list(range(len(paths)))
+    random.Random(42).shuffle(order)
+    order = order[:min(cap, len(paths))]
+    n = len(order)
+    imgs = torch.zeros(n, 3, IMG_SIZE, IMG_SIZE)
+    masks = torch.zeros(n, NUM_CLASSES, IMG_SIZE, IMG_SIZE)
+    cls_net.eval()
+    made = 0
+    for out_i, i in enumerate(order):
+        try:
+            image = Image.open(paths[i]).convert("RGB")
+        except (FileNotFoundError, OSError):
+            image = Image.new("RGB", (IMG_SIZE, IMG_SIZE))
+        t = eval_tf(image).unsqueeze(0)
+        imgs[out_i] = t[0]
+        label = labels[i]
+        if label > 0:
+            heat = gradcam_soft_mask(cls_net, t, label)
+            masks[out_i, label] = torch.from_numpy(heat)
+        made += 1
+        if made % max(1, n // 5) == 0:
+            log(f"  Grad-CAM targets: {made}/{n}")
+    return imgs, masks
+
+
+def train_segmentation_head(cls_net, train_paths, train_labels, eval_tf,
+                            seg_cap, seg_epochs, batch_size, num_workers, log):
+    """
+    Stage 2: distil the classifier's Grad-CAM into the MultiTaskUNet's
+    segmentation output. The U-Net learns to reproduce the disease-localisation
+    map in a single forward pass (no gradient needed at inference). Returns
+    (trained_net, best_dice) or (None, 0.0) if it could not run.
+    """
+    log(f"Stage 2: building Grad-CAM segmentation targets (cap {seg_cap})...")
+    imgs, masks = build_gradcam_targets(cls_net, train_paths, train_labels,
+                                        eval_tf, seg_cap, log)
+    if imgs.shape[0] < 8:
+        log("Not enough images to train segmentation; skipping.")
+        return None, 0.0
+
+    ds = torch.utils.data.TensorDataset(imgs, masks)
+    n_val = max(1, int(0.15 * len(ds)))
+    n_train = len(ds) - n_val
+    train_sub, val_sub = torch.utils.data.random_split(
+        ds, [n_train, n_val], generator=torch.Generator().manual_seed(42))
+    tl = DataLoader(train_sub, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    vl = DataLoader(val_sub, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    seg_net = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
+    seg_crit = DiceBCELoss()
+    opt = optim.Adam(seg_net.parameters(), lr=1e-3)
+    best_dice = 0.0
+    best_state = None
+
+    for ep in range(seg_epochs):
+        seg_net.train()
+        for xb, yb in tl:
+            xb, yb = xb.to(device), yb.to(device)
+            opt.zero_grad()
+            _, pred = seg_net(xb)
+            loss = seg_crit(pred, yb)
+            if torch.isnan(loss) or torch.isinf(loss):
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(seg_net.parameters(), 1.0)
+            opt.step()
+
+        seg_net.eval()
+        dsum = k = 0
+        with torch.no_grad():
+            for xb, yb in vl:
+                xb, yb = xb.to(device), yb.to(device)
+                _, pred = seg_net(xb)
+                dsum += dice_coefficient(pred, yb)
+                k += 1
+        val_dice = dsum / max(1, k)
+        log(f"  Seg epoch {ep+1}/{seg_epochs} | Val Dice: {val_dice:.4f}")
+        if val_dice > best_dice:
+            best_dice = val_dice
+            best_state = {kk: v.detach().cpu().clone() for kk, v in seg_net.state_dict().items()}
+
+    if best_state is not None:
+        seg_net.load_state_dict(best_state)
+    return seg_net, best_dice
+
+
 # Training
-def run_training_thread(num_samples, epochs, lr, batch_size):
-    global training_status, training_logs, seg_model
+def run_training_thread(num_samples, epochs, lr, batch_size, num_workers=0,
+                        train_seg=True, seg_cap=800, seg_epochs=6):
+    global training_status, training_logs, cls_model, seg_model, seg_disease_model
     training_status = "Training..."
     training_logs = []
     writer = None
@@ -347,250 +719,265 @@ def run_training_thread(num_samples, epochs, lr, batch_size):
         writer.add_scalar("Training/started", 1, 0)
         writer.flush()
         training_logs.append("TensorBoard logging to runs/lunglens")
-        training_logs.append("Collecting dataset paths...")
-        image_paths, labels = collect_data()
-        training_logs.append(f"Total available images: {len(image_paths)}")
+        training_logs.append("Collecting dataset (paths, labels, patient groups, sources)...")
+        all_paths, all_labels, all_groups, all_sources = collect_dataset()
+        training_logs.append(f"Total available images: {len(all_paths)}")
+        if len(all_paths) < 20:
+            raise RuntimeError("Not enough images found to train (need at least 20).")
 
-        if num_samples < len(image_paths):
-            image_paths = list(image_paths[:num_samples])
-            labels      = list(labels[:num_samples])
+        # Stratified subsample keeps class proportions stable across runs.
+        all_paths, all_labels, all_groups, all_sources = stratified_subsample(
+            all_paths, all_labels, all_groups, all_sources, num_samples)
+        training_logs.append(f"Using {len(all_paths)} images after stratified subsample.")
 
-        training_logs.append(f"Using {len(image_paths)} images for training/validation split.")
+        # Patient-grouped train/val/test split: no patient spans two splits, and
+        # test is held out purely for the final report.
+        (train_paths, train_labels, train_sources), \
+            (val_paths, val_labels, val_sources), \
+            (test_paths, test_labels, test_sources) = patient_grouped_split(
+                all_paths, all_labels, all_groups, all_sources)
+        training_logs.append(
+            f"Split (patient-grouped) -> Train: {len(train_paths)} | "
+            f"Val: {len(val_paths)} | Test: {len(test_paths)}")
 
-        stratify_labels = None
-        if len(image_paths) >= 10 and len(set(labels)) > 1:
-            try:
-                label_counts = np.bincount(labels)
-                if np.min(label_counts) >= 2:
-                    stratify_labels = labels
-                else:
-                    training_logs.append("WARNING: Class imbalance detected, using random split")
-            except Exception as e:
-                training_logs.append(f"WARNING: Stratification check failed: {e}")
+        train_tf, eval_tf = build_transforms()
 
-        train_paths, val_paths, train_labels, val_labels = train_test_split(
-            image_paths, labels, test_size=VAL_SPLIT, random_state=42, stratify=stratify_labels)
+        # ChestXRayDataset returns (image, label): a pure classification target.
+        # No pseudo-masks, no segmentation loss. The DenseNet trained here is the
+        # model predict_image actually serves, and Grad-CAM supplies the overlay.
+        train_ds = ChestXRayDataset(train_paths, train_labels, transform=train_tf)
+        val_ds   = ChestXRayDataset(val_paths,   val_labels,   transform=eval_tf)
+        test_ds  = ChestXRayDataset(test_paths,  test_labels,  transform=eval_tf)
 
-        training_logs.append(f"Train samples: {len(train_paths)} | Val samples: {len(val_paths)}")
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                  num_workers=num_workers)
+        val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
+                                  num_workers=num_workers)
+        test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False,
+                                  num_workers=num_workers)
 
-        # Only photometric augmentation is applied: the pseudo-mask is computed
-        # from the original image, so geometric transforms (rotation/flip) would
-        # misalign the input and its segmentation target. Brightness/contrast
-        # jitter changes pixel intensities without moving them, so it is safe.
-        train_tf = transforms.Compose([
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2),
-            transforms.ToTensor(),
-            _normalize_transform()])
+        training_logs.append("Initializing DenseNet-121 classifier (ImageNet-pretrained)...")
+        net = CNNModel(classCount=NUM_CLASSES, isTrained=True).to(device)
 
-        val_tf = transforms.Compose([
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
-            transforms.ToTensor(),
-            _normalize_transform()])
-
-        # SegmentationDataset, masks built lazily in __getitem__, no pre-pass
-        training_logs.append("Building datasets (lazy pseudo-mask generation)...")
-        train_ds = SegmentationDataset(train_paths, train_labels, transform=train_tf)
-        val_ds   = SegmentationDataset(val_paths,   val_labels,   transform=val_tf)
-
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=0)
-        val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=0)
-
-        # Train on a local network; the global seg_model is only swapped after
-        # the run finishes so inference never sees a half-trained model.
-        training_logs.append("Initializing MultiTaskUNet...")
-        net = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
-
-        # Inverse-frequency class weights so the minority classes (typically
-        # Covid-19) are not drowned out by the majority Normal/Pneumonia images.
-        # Weights are normalised to mean 1.0 to keep the loss scale stable.
+        # Inverse-frequency class weights so the minority classes (TB, Covid-19)
+        # are not drowned out by Normal/Pneumonia. Normalised to mean 1.0 so the
+        # loss scale is unchanged.
         counts = np.bincount(train_labels, minlength=NUM_CLASSES).astype(np.float64)
         inv = 1.0 / np.clip(counts, 1.0, None)
-        class_weights = torch.tensor(
-            inv / inv.mean(), dtype=torch.float32, device=device)
+        class_weights = torch.tensor(inv / inv.mean(), dtype=torch.float32, device=device)
         training_logs.append(
-            "Class counts: "
-            + ", ".join(f"{CLASSES[i]}={int(counts[i])}" for i in range(NUM_CLASSES))
-        )
+            "Train class counts: "
+            + ", ".join(f"{CLASSES[i]}={int(counts[i])}" for i in range(NUM_CLASSES)))
 
-        class_crit = nn.CrossEntropyLoss(weight=class_weights)
-        seg_crit   = DiceBCELoss()
-        optimizer  = optim.Adam(net.parameters(), lr=lr)
-        # Reduce LR when validation Dice plateaus so the segmentation head keeps
-        # improving instead of stalling at a fixed learning rate.
-        scheduler  = optim.lr_scheduler.ReduceLROnPlateau(
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        optimizer = optim.Adam(net.parameters(), lr=lr)
+        # Schedule and checkpoint-selection both key on validation macro-F1, the
+        # right target under 7:1 class imbalance where raw accuracy is misleading.
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="max", factor=0.5, patience=2)
 
-        best_val_dice = 0.0
-        history = {
-            "train_acc": [],
-            "val_acc": [],
-            "train_dice": [],
-            "val_dice": [],
-        }
+        best_val_f1 = -1.0
+        best_metrics = None
+        epochs_since_improve = 0
+        history = {"train_acc": [], "val_acc": [], "val_f1": []}
 
         for epoch in range(epochs):
             net.train()
-            run_loss = correct = total = 0
-            total_dice = 0.0
-
+            correct = total = 0
             training_logs.append(f"[Epoch {epoch+1}/{epochs}] Training ({len(train_loader)} batches)...")
-            for batch_idx, (inputs, target_masks, target_labels) in enumerate(train_loader):
+            for batch_idx, (inputs, target_labels) in enumerate(train_loader):
                 try:
-                    inputs        = inputs.to(device)
-                    target_masks  = target_masks.to(device)
+                    inputs = inputs.to(device)
                     target_labels = target_labels.to(device)
 
                     optimizer.zero_grad()
-                    cls_logits, pred_masks = net(inputs)
-                    loss = class_crit(cls_logits, target_labels) + SEG_LOSS_WEIGHT * seg_crit(pred_masks, target_masks)
+                    logits = net(inputs)
+                    loss = criterion(logits, target_labels)
 
                     if torch.isnan(loss) or torch.isinf(loss):
-                        training_logs.append(f"  WARNING Batch {batch_idx+1}: NaN/Inf loss detected: {loss.item()}")
+                        training_logs.append(f"  WARNING Batch {batch_idx+1}: NaN/Inf loss")
                         continue
 
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
                     optimizer.step()
 
-                    run_loss += loss.item()
-                    _, pred = cls_logits.max(1)
-                    total   += target_labels.size(0)
-                    correct += pred.eq(target_labels).sum().item()
-                    total_dice += dice_coefficient(pred_masks, target_masks)
-                    batch_step = epoch * len(train_loader) + batch_idx + 1
+                    total += target_labels.size(0)
+                    correct += logits.argmax(1).eq(target_labels).sum().item()
+                    step = epoch * len(train_loader) + batch_idx + 1
                     if (batch_idx + 1) % max(1, len(train_loader) // 20) == 0:
-                        writer.add_scalar("Loss/train_batch", loss.item(), batch_step)
-                        writer.add_scalar("Accuracy/train_running", 100.0 * correct / total, batch_step)
-                        writer.add_scalar("Dice/train_running", total_dice / (batch_idx + 1), batch_step)
+                        writer.add_scalar("Loss/train_batch", loss.item(), step)
+                        writer.add_scalar("Accuracy/train_running", 100.0 * correct / total, step)
                         writer.flush()
-
                     if (batch_idx + 1) % max(1, len(train_loader) // 5) == 0:
                         print(f"  Train batch {batch_idx+1}/{len(train_loader)}", flush=True)
                 except Exception as e:
                     import traceback
-                    error_trace = traceback.format_exc()
-                    training_logs.append(f"  ERROR in batch {batch_idx+1}: {str(e)}")
-                    training_logs.append(error_trace)
-                    print(f"Batch error: {e}\n{error_trace}", flush=True)
+                    training_logs.append(f"  ERROR in batch {batch_idx+1}: {e}")
+                    print(f"Batch error: {e}\n{traceback.format_exc()}", flush=True)
                     continue
 
-            train_acc  = 100.0 * correct / total if total > 0 else 0
-            train_dice = total_dice / max(1, len(train_loader))
+            train_acc = 100.0 * correct / total if total > 0 else 0.0
 
-            net.eval()
-            val_loss = val_correct = val_total = 0
-            val_dice_sum = 0.0
-
+            # Validation: collect predictions so we can score macro-F1, not just
+            # accuracy, and select the checkpoint on it.
             training_logs.append(f"[Epoch {epoch+1}/{epochs}] Validation ({len(val_loader)} batches)...")
-            with torch.no_grad():
-                for batch_idx, (inputs, target_masks, target_labels) in enumerate(val_loader):
-                    try:
-                        inputs        = inputs.to(device)
-                        target_masks  = target_masks.to(device)
-                        target_labels = target_labels.to(device)
+            y_true, y_pred = evaluate_classifier(net, val_loader)
+            val_acc = 100.0 * np.mean(np.array(y_true) == np.array(y_pred)) if y_true else 0.0
+            val_f1 = 100.0 * f1_score(y_true, y_pred, average="macro", zero_division=0) if y_true else 0.0
 
-                        cls_logits, pred_masks = net(inputs)
-                        loss = class_crit(cls_logits, target_labels) + SEG_LOSS_WEIGHT * seg_crit(pred_masks, target_masks)
-
-                        if torch.isnan(loss) or torch.isinf(loss):
-                            training_logs.append(f"  WARNING Val Batch {batch_idx+1}: NaN/Inf loss {loss.item()}")
-                            continue
-
-                        val_loss  += loss.item()
-                        _, pred    = cls_logits.max(1)
-                        val_total += target_labels.size(0)
-                        val_correct += pred.eq(target_labels).sum().item()
-                        dice_val = dice_coefficient(pred_masks, target_masks)
-                        val_dice_sum += dice_val
-                        val_batch_step = epoch * len(val_loader) + batch_idx + 1
-                        if (batch_idx + 1) % max(1, len(val_loader) // 20) == 0:
-                            writer.add_scalar("Loss/val_batch", loss.item(), val_batch_step)
-                            writer.add_scalar("Accuracy/val_running", 100.0 * val_correct / val_total, val_batch_step)
-                            writer.add_scalar("Dice/val_running", val_dice_sum / (batch_idx + 1), val_batch_step)
-                            writer.flush()
-
-                        if (batch_idx + 1) % max(1, len(val_loader) // 5) == 0:
-                            print(f"  Val batch {batch_idx+1}/{len(val_loader)}", flush=True)
-                    except Exception as e:
-                        training_logs.append(f"  ERROR in val batch {batch_idx+1}: {str(e)}")
-                        print(f"Val batch error: {e}", flush=True)
-
-            val_acc  = 100.0 * val_correct / val_total if val_total > 0 else 0
-            val_dice = val_dice_sum / max(1, len(val_loader))
-
-            # Step the scheduler on validation Dice and report the active LR.
-            scheduler.step(val_dice)
+            scheduler.step(val_f1)
             current_lr = optimizer.param_groups[0]["lr"]
-            writer.add_scalar("LR", current_lr, epoch + 1)
 
             log = (f"Epoch {epoch+1}/{epochs} | Train Acc: {train_acc:.2f}% | "
-                   f"Train Dice: {train_dice:.4f} | Val Acc: {val_acc:.2f}% | "
-                   f"Val Dice: {val_dice:.4f} | LR: {current_lr:.2e}")
+                   f"Val Acc: {val_acc:.2f}% | Val macro-F1: {val_f1:.2f}% | LR: {current_lr:.2e}")
             training_logs.append(log)
             print(log, flush=True)
             history["train_acc"].append(train_acc)
             history["val_acc"].append(val_acc)
-            history["train_dice"].append(train_dice)
-            history["val_dice"].append(val_dice)
-            tensorboard_step = epoch + 1
-            writer.add_scalar("Accuracy/train", train_acc, tensorboard_step)
-            writer.add_scalar("Accuracy/val", val_acc, tensorboard_step)
-            writer.add_scalar("Dice/train", train_dice, tensorboard_step)
-            writer.add_scalar("Dice/val", val_dice, tensorboard_step)
+            history["val_f1"].append(val_f1)
+            writer.add_scalar("Accuracy/train", train_acc, epoch + 1)
+            writer.add_scalar("Accuracy/val", val_acc, epoch + 1)
+            writer.add_scalar("F1/val_macro", val_f1, epoch + 1)
+            writer.add_scalar("LR", current_lr, epoch + 1)
             writer.flush()
 
-            if val_dice > best_val_dice:
-                best_val_dice = val_dice
-                torch.save(net.state_dict(), seg_model_path)
-                training_logs.append(f"--> Saved best model (Val Dice: {best_val_dice:.4f})")
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
+                epochs_since_improve = 0
+                torch.save(net.state_dict(), model_path)
+                per_class_recall = recall_score(
+                    y_true, y_pred, labels=list(range(NUM_CLASSES)),
+                    average=None, zero_division=0).tolist()
+                training_logs.append(
+                    f"--> Saved best classifier (Val macro-F1: {best_val_f1:.2f}%)")
+                # Captured at the saved epoch, since the last epoch is not
+                # necessarily the one written to disk.
+                best_metrics = {
+                    "val_acc": val_acc,
+                    "val_f1": val_f1,
+                    "train_acc": train_acc,
+                    "epoch": epoch + 1,
+                    "epochs_requested": epochs,
+                    "val_per_class_recall": {CLASSES[i]: 100.0 * per_class_recall[i]
+                                             for i in range(NUM_CLASSES)},
+                    "train_samples": len(train_paths),
+                    "val_samples": len(val_paths),
+                    "test_samples": len(test_paths),
+                    "batch_size": batch_size,
+                    "lr": lr,
+                    "class_counts": {CLASSES[i]: int(counts[i]) for i in range(NUM_CLASSES)},
+                    "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                }
+            else:
+                epochs_since_improve += 1
+                if epochs_since_improve >= EARLY_STOP_PATIENCE:
+                    training_logs.append(
+                        f"Early stopping: no macro-F1 gain for {EARLY_STOP_PATIENCE} epochs.")
+                    if best_metrics is not None:
+                        best_metrics["early_stopped"] = True
+                    break
 
+        # Reload the best checkpoint and report on the held-out TEST set, which
+        # was never used for selection, so the headline number is honest.
+        if os.path.exists(model_path):
+            eval_net = CNNModel(classCount=NUM_CLASSES, isTrained=False)
+            eval_net.load_state_dict(torch.load(model_path, map_location=device))
+            eval_net.to(device)
+        else:
+            eval_net = net
+
+        if test_paths and best_metrics is not None:
+            t_true, t_pred = evaluate_classifier(eval_net, test_loader)
+            test_acc = 100.0 * np.mean(np.array(t_true) == np.array(t_pred))
+            test_f1 = 100.0 * f1_score(t_true, t_pred, average="macro", zero_division=0)
+            report = classification_report(
+                t_true, t_pred, labels=list(range(NUM_CLASSES)),
+                target_names=CLASSES, zero_division=0)
+            cm = confusion_matrix(t_true, t_pred, labels=list(range(NUM_CLASSES)))
+            src_acc = per_source_accuracy(t_true, t_pred, test_sources)
+
+            best_metrics.update({
+                "test_acc": test_acc,
+                "test_f1": test_f1,
+                "test_per_source_acc": src_acc,
+                "confusion_matrix": cm.tolist(),
+            })
+            training_logs.append(f"Held-out TEST | Acc: {test_acc:.2f}% | macro-F1: {test_f1:.2f}%")
+            training_logs.append("Per-class report (test):\n" + report)
+            training_logs.append(
+                "Per-source accuracy (test): "
+                + ", ".join(f"{s}={v['acc']:.1f}% (n={v['n']})" for s, v in src_acc.items()))
+            training_logs.append(
+                "Confusion matrix (rows=true, cols=pred; order "
+                + ", ".join(CLASSES) + "):\n" + str(cm))
+            writer.add_scalar("Accuracy/test", test_acc, 0)
+            writer.add_scalar("F1/test_macro", test_f1, 0)
+            writer.flush()
+
+        # Stage 2: distil the classifier's Grad-CAM into a disease-segmentation
+        # U-Net. This is the segmentation model the Analysis tab uses; its target
+        # is where the classifier actually looked, not image brightness.
+        trained_seg = None
+        if train_seg and best_metrics is not None:
+            try:
+                trained_seg, seg_dice = train_segmentation_head(
+                    eval_net, train_paths, train_labels, eval_tf,
+                    seg_cap, seg_epochs, batch_size, num_workers,
+                    lambda m: (training_logs.append(m), print(m, flush=True)))
+                if trained_seg is not None:
+                    torch.save(trained_seg.state_dict(), seg_model_path)
+                    best_metrics["segmentation"] = "gradcam_distilled"
+                    best_metrics["seg_val_dice"] = seg_dice
+                    best_metrics["seg_train_images"] = min(seg_cap, len(train_paths))
+                    training_logs.append(
+                        f"--> Saved disease-segmentation U-Net (Val Dice: {seg_dice:.4f}).")
+                    writer.add_scalar("Dice/seg_val", seg_dice, 0)
+                    writer.flush()
+            except Exception as e:
+                import traceback
+                training_logs.append(f"WARNING: segmentation stage failed: {e}")
+                print(f"Seg stage failed: {e}\n{traceback.format_exc()}", flush=True)
+
+        if best_metrics is not None and save_training_metrics(best_metrics):
+            training_logs.append(f"Recorded checkpoint metrics to {metrics_path}.")
+
+        # Plot on the Agg backend: pyplot's default GUI backend is not safe to
+        # call from this worker thread and can hard-crash the process.
+        import matplotlib
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         epochs_range = range(1, len(history["train_acc"]) + 1)
-
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
         ax1.plot(epochs_range, history["train_acc"], "b-o", label="Train Acc")
         ax1.plot(epochs_range, history["val_acc"], "r-o", label="Val Acc")
         ax1.set_title("Classification Accuracy")
-        ax1.set_xlabel("Epoch")
-        ax1.set_ylabel("Accuracy (%)")
-        ax1.legend()
-        ax1.grid(True)
-
-        ax2.plot(epochs_range, history["train_dice"], "b-o", label="Train Dice")
-        ax2.plot(epochs_range, history["val_dice"], "r-o", label="Val Dice")
-        ax2.set_title("Segmentation Dice")
-        ax2.set_xlabel("Epoch")
-        ax2.set_ylabel("Dice Score")
-        ax2.legend()
-        ax2.grid(True)
-
+        ax1.set_xlabel("Epoch"); ax1.set_ylabel("Accuracy (%)"); ax1.legend(); ax1.grid(True)
+        ax2.plot(epochs_range, history["val_f1"], "g-o", label="Val macro-F1")
+        ax2.set_title("Validation Macro-F1")
+        ax2.set_xlabel("Epoch"); ax2.set_ylabel("F1 (%)"); ax2.legend(); ax2.grid(True)
         plt.tight_layout()
         plt.savefig("training_curves.png", dpi=150)
-        plt.show(block=False)
         plt.close(fig)
-        print("Graph saved as training_curves.png", flush=True)
         training_logs.append("Graph saved as training_curves.png")
         writer.close()
         writer = None
 
-        # Publish the best checkpoint for inference only after the run ends so
-        # requests never see a half-trained model in train mode.
-        publish = net
-        if os.path.exists(seg_model_path):
-            try:
-                publish = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
-                publish.load_state_dict(torch.load(seg_model_path, map_location=device))
-                publish.to(device)
-            except Exception as e:
-                training_logs.append(f"WARNING: could not reload best checkpoint: {e}")
-                publish = net
-        publish.eval()
-        warm_up_model(publish)
+        # Publish the reloaded best classifier (and the new segmentation U-Net,
+        # if trained) for inference only after the run ends, under the lock, so
+        # requests never see a half-trained model.
+        eval_net.eval()
+        warm_up_model(eval_net)
+        if trained_seg is not None:
+            trained_seg.eval()
+            warm_up_model(trained_seg)
         with model_lock:
-            seg_model = publish
+            cls_model = eval_net
+            if trained_seg is not None:
+                seg_model = trained_seg
+                # From now on inference may prefer the U-Net disease mask.
+                seg_disease_model = True
 
         training_status = "Training Finished"
         training_logs.append("Done.")
@@ -612,7 +999,8 @@ def _is_training_active():
     return training_status == "Training..."
 
 
-def start_training(num_samples, epochs, lr, batch_size):
+def start_training(num_samples, epochs, lr, batch_size, num_workers,
+                   train_seg, seg_cap, seg_epochs):
     global training_status
 
     # Returns (status_message, timer_update). The log-refresh Timer is only
@@ -632,6 +1020,10 @@ def start_training(num_samples, epochs, lr, batch_size):
         epochs      = int(epochs)
         batch_size  = int(batch_size)
         lr          = float(lr)
+        num_workers = int(num_workers)
+        train_seg   = bool(train_seg)
+        seg_cap     = int(seg_cap)
+        seg_epochs  = int(seg_epochs)
     except (TypeError, ValueError):
         return result("Invalid hyperparameters: please enter numeric values.", False)
 
@@ -643,17 +1035,27 @@ def start_training(num_samples, epochs, lr, batch_size):
         return result("Batch size must be at least 1.", False)
     if not (0 < lr < 1):
         return result("Learning rate must be between 0 and 1 (e.g. 0.0001).", False)
+    if num_workers < 0:
+        return result("Data loader workers cannot be negative.", False)
+    if train_seg and (seg_cap < 8 or seg_epochs < 1):
+        return result("Segmentation needs cap >= 8 and epochs >= 1.", False)
 
     # Mark active synchronously so the first Timer tick does not race the thread.
     training_status = "Training..."
-    threading.Thread(target=run_training_thread,
-                     args=(num_samples, epochs, lr, batch_size)).start()
+    threading.Thread(
+        target=run_training_thread,
+        args=(num_samples, epochs, lr, batch_size, num_workers),
+        kwargs={"train_seg": train_seg, "seg_cap": seg_cap, "seg_epochs": seg_epochs},
+    ).start()
     return result("Training started in background...", True)
 
 
 def get_training_logs():
     # Third return value stops the Timer once the run reaches a terminal state.
-    return "\n".join(training_logs), training_status, gr.Timer(active=_is_training_active())
+    # The metrics box is re-read on every tick so it picks up the new scores as
+    # soon as a run writes them, without needing a reload.
+    return ("\n".join(training_logs), training_status,
+            gr.Timer(active=_is_training_active()), build_metrics_html())
 
 
 # Model loading / warm-up
@@ -865,15 +1267,26 @@ def predict_image(image, target_class_name):
         # which is what made the old shading look wrong).
         mask = None
         threshold = MASK_DISPLAY_THRESHOLD
-        if cls_model is not None:
+        mask_source = None
+        # Prefer the U-Net disease mask when it is a fresh Grad-CAM-distilled
+        # model: it reproduces the classifier's localisation in one forward pass
+        # (no backward pass needed) and is the segmentation output the app is
+        # meant to show. Fall back to live Grad-CAM, then to a stale U-Net mask.
+        if (seg_disease_model and pred_masks is not None and viz_idx > 0):
+            mask = pred_masks[0, viz_idx].cpu().numpy()
+            threshold = MASK_DISPLAY_THRESHOLD
+            mask_source = "segmentation"
+        elif cls_model is not None:
             target_layer = get_gradcam_layer(cls_model)
             grad_cam     = GradCAM(cls_model, target_layer)
             grad_t       = tf(image).unsqueeze(0).to(device)
             grad_t.requires_grad_(True)
             mask = grad_cam.generate_heatmap(grad_t, viz_idx)
             threshold = OVERLAY_THRESHOLD
+            mask_source = "gradcam"
         elif pred_masks is not None and viz_idx > 0:
             mask = pred_masks[0, viz_idx].cpu().numpy()
+            mask_source = "segmentation"
 
         superimposed = orig_np
         has_region = False
@@ -916,6 +1329,11 @@ def predict_image(image, target_class_name):
         else:
             txt += f"\n\nHeatmap: model attention for {viz_cls} ({viz_prob * 100:.1f}%)."
 
+        if mask is not None:
+            txt += ("\n\n_Overlay source: disease-segmentation U-Net._"
+                    if mask_source == "segmentation"
+                    else "\n\n_Overlay source: Grad-CAM._")
+
         return txt, prob_dict, gr.update(value=Image.fromarray(superimposed))
 
     except Exception as e:
@@ -927,15 +1345,22 @@ def predict_image(image, target_class_name):
 # is what removes the first-inference freeze described in the system plan.
 try:
     seg_model, cls_model = load_models_from_disk()
+    # Only trust the on-disk seg model as a disease segmenter if the metrics file
+    # says it was Grad-CAM-distilled; otherwise it is the old anatomy-tracing one.
+    _startup_metrics = load_training_metrics()
+    seg_disease_model = bool(seg_model is not None and _startup_metrics
+                             and _startup_metrics.get("segmentation") == "gradcam_distilled")
     if seg_model is None and cls_model is None:
         print("No trained model found on disk. Train a model before inference.")
     else:
         loaded = [name for name, m in
                   [("U-Net segmentation", seg_model), ("DenseNet-121 classifier", cls_model)]
                   if m is not None]
-        print(f"Loaded and warmed up: {', '.join(loaded)}.")
+        seg_kind = " (disease-distilled)" if seg_disease_model else ""
+        print(f"Loaded and warmed up: {', '.join(loaded)}{seg_kind}.")
 except Exception as e:
     seg_model = cls_model = None
+    seg_disease_model = False
     print(f"Warning: Could not load models at startup: {e}")
 
 
@@ -1035,6 +1460,27 @@ html, body, .gradio-container {
 
 .conf-label, .conf-label .gr-label { border-radius: 4px !important; }
 
+/* Model metrics box: quiet inset panel, numbers lead, labels follow. */
+.ll-metrics {
+    border: 1px solid var(--ll-border);
+    border-radius: 4px;
+    padding: 12px 14px;
+    background: var(--ll-bg);
+}
+.ll-metrics-head {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--ll-muted); margin-bottom: 8px;
+}
+.ll-metrics-head-2 { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ll-border); }
+.ll-metric { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.ll-metric-v { font-size: 20px; font-weight: 600; color: var(--ll-text); line-height: 1.2; }
+.ll-metric-na { font-size: 14px; font-weight: 500; color: var(--ll-muted); }
+.ll-metric-k { font-size: 12px; color: var(--ll-text-2); }
+.ll-metrics-note {
+    font-size: 12px !important; color: var(--ll-muted) !important;
+    margin: 6px 0 0 !important; line-height: 1.5 !important;
+}
+
 .status-pill textarea, .status-pill input { font-weight: 600 !important; }
 
 .disclaimer-note {
@@ -1079,6 +1525,88 @@ def build_header_html():
   <h1>LungLens</h1>
   <span class="ll-sub">Chest X-ray classification and region overlay</span>
   <span class="ll-status">{status} &middot; Research use only</span>
+</div>
+"""
+
+
+def build_metrics_html():
+    """
+    Status box for the served DenseNet classifier: its held-out test score (the
+    honest number, since test is never used for checkpoint selection), per-class
+    recall, and a per-source probe for the class/scanner confounding. When no
+    metrics file matches the checkpoint on disk the score is reported as
+    unrecorded rather than guessed.
+    """
+    metrics = load_training_metrics()
+    if metrics is None:
+        body = (
+            "<div class='ll-metric'><span class='ll-metric-v ll-metric-na'>Not recorded</span>"
+            "<span class='ll-metric-k'>Model accuracy</span></div>"
+            "<p class='ll-metrics-note'>The classifier on disk predates metric tracking, "
+            "or was trained elsewhere. Run a training pass to record its scores.</p>"
+        )
+    else:
+        # Prefer the held-out test figures; fall back to validation for runs too
+        # small to carve a test split.
+        acc = metrics.get("test_acc", metrics.get("val_acc"))
+        f1 = metrics.get("test_f1", metrics.get("val_f1"))
+        scope = "held-out test" if "test_acc" in metrics else "validation"
+        recalls = metrics.get("val_per_class_recall", {})
+        recall_str = ", ".join(f"{k} {v:.0f}%" for k, v in recalls.items()) if recalls else ""
+        src = metrics.get("test_per_source_acc", {})
+        src_str = ", ".join(f"{s} {v['acc']:.0f}%" for s, v in src.items()) if src else ""
+
+        rows = (
+            f"<div class='ll-metric'><span class='ll-metric-v'>{acc:.1f}%</span>"
+            f"<span class='ll-metric-k'>Accuracy ({scope})</span></div>"
+        )
+        if f1 is not None:
+            rows += (
+                f"<div class='ll-metric'><span class='ll-metric-v'>{f1:.1f}%</span>"
+                f"<span class='ll-metric-k'>Macro-F1 &mdash; the number to watch under class imbalance</span></div>"
+            )
+        note = (
+            f"<p class='ll-metrics-note'>DenseNet-121, best of "
+            f"{metrics.get('epochs_requested', '?')} epochs (epoch {metrics.get('epoch', '?')}"
+            f"{', early-stopped' if metrics.get('early_stopped') else ''}), "
+            f"{metrics.get('train_samples', '?')} train / {metrics.get('val_samples', '?')} val / "
+            f"{metrics.get('test_samples', '?')} test images, batch "
+            f"{metrics.get('batch_size', '?')}, lr {metrics.get('lr', 0):.0e}. "
+            f"Recorded {metrics.get('saved_at', 'unknown')}.</p>"
+        )
+        if recall_str:
+            note += f"<p class='ll-metrics-note'>Per-class recall (val): {recall_str}.</p>"
+        if src_str:
+            note += (
+                f"<p class='ll-metrics-note'>Accuracy by source dataset: {src_str}. "
+                f"A large gap here suggests the model is keying on the scanner, not "
+                f"the pathology.</p>"
+            )
+        if metrics.get("segmentation") == "gradcam_distilled":
+            note += (
+                f"<p class='ll-metrics-note'>Segmentation: disease U-Net distilled from "
+                f"Grad-CAM (Dice {metrics.get('seg_val_dice', 0):.3f} vs its Grad-CAM target, "
+                f"{metrics.get('seg_train_images', '?')} images). Drives the Analysis overlay.</p>"
+            )
+        else:
+            note += (
+                "<p class='ll-metrics-note'>Segmentation: none trained yet; the overlay "
+                "uses live Grad-CAM. Train with segmentation enabled to add the disease U-Net.</p>"
+            )
+        body = rows + note
+
+    return f"""
+<div class="ll-metrics">
+  <div class="ll-metrics-head">Current model &mdash; the served classifier</div>
+  {body}
+  <div class="ll-metrics-head ll-metrics-head-2">Recommended run</div>
+  <p class="ll-metrics-note">
+    {RECOMMENDED_SAMPLES} images &middot; {RECOMMENDED_EPOCHS} epochs &middot;
+    batch {RECOMMENDED_BATCH} &middot; lr {RECOMMENDED_LR:.0e}.
+    Use as much data as you can: the minority classes (TB, Covid-19) only become
+    well represented in the val/test folds at scale. Early stopping means
+    over-requesting epochs is safe. Expect several hours on CPU.
+  </p>
 </div>
 """
 
@@ -1138,17 +1666,30 @@ with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
 
     with gr.Tab("Training"):
         with gr.Column(elem_classes="custom-panel"):
-            gr.Markdown("### Train the multi-task U-Net\nSet parameters and start a run. "
-                        "Status and logs update automatically while training is active.")
+            gr.Markdown("### Train the classifier + disease segmentation\nStage 1 trains the "
+                        "DenseNet-121 that serves predictions on the Analysis tab. Stage 2 "
+                        "(optional) distils its Grad-CAM into a U-Net that segments the disease "
+                        "region, which then drives the overlay. Status and logs update "
+                        "automatically while a run is active.")
             with gr.Row():
                 with gr.Column(scale=1):
-                    num_samples_slider = gr.Slider(100, 10000, value=1000, step=100, label="Dataset size")
-                    epochs_slider      = gr.Slider(1, 20, value=5, step=1, label="Epochs")
-                    batch_size_slider  = gr.Slider(8, 64, value=16, step=8, label="Batch size")
-                    lr_input           = gr.Number(value=0.0001, label="Learning rate", precision=6)
+                    num_samples_slider = gr.Slider(200, 12000, value=RECOMMENDED_SAMPLES,
+                                                   step=200, label="Dataset size (images to use)")
+                    epochs_slider      = gr.Slider(1, 40, value=RECOMMENDED_EPOCHS, step=1,
+                                                   label="Max epochs (early-stops on plateau)")
+                    batch_size_slider  = gr.Slider(8, 64, value=RECOMMENDED_BATCH, step=8, label="Batch size")
+                    lr_input           = gr.Number(value=RECOMMENDED_LR, label="Learning rate", precision=6)
+                    workers_slider     = gr.Slider(0, 8, value=0, step=1,
+                                                   label="Data loader workers (raise to speed up loading)")
+                    seg_checkbox       = gr.Checkbox(value=True,
+                                                     label="Stage 2: train disease segmentation (Grad-CAM distillation)")
+                    seg_cap_slider     = gr.Slider(50, 3000, value=800, step=50,
+                                                   label="Segmentation images (Grad-CAM targets; slow on CPU)")
+                    seg_epochs_slider  = gr.Slider(1, 20, value=6, step=1, label="Segmentation epochs")
                     train_btn          = gr.Button("Start training", variant="primary", elem_classes="primary-btn")
                     status_box         = gr.Textbox(value=training_status, label="Status",
                                                     interactive=False, elem_classes="status-pill")
+                    metrics_box        = gr.HTML(build_metrics_html())
                 with gr.Column(scale=2):
                     log_box     = gr.Textbox(value="", label="Training log", interactive=False,
                                              lines=18, max_lines=30, autoscroll=True)
@@ -1160,13 +1701,15 @@ with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
         # "processing" state.
         log_timer = gr.Timer(2.0, active=False)
         log_timer.tick(fn=get_training_logs, inputs=[],
-                       outputs=[log_box, status_box, log_timer])
+                       outputs=[log_box, status_box, log_timer, metrics_box])
 
         train_btn.click(fn=start_training,
-                        inputs=[num_samples_slider, epochs_slider, lr_input, batch_size_slider],
+                        inputs=[num_samples_slider, epochs_slider, lr_input,
+                                batch_size_slider, workers_slider,
+                                seg_checkbox, seg_cap_slider, seg_epochs_slider],
                         outputs=[status_box, log_timer])
         refresh_btn.click(fn=get_training_logs, inputs=[],
-                          outputs=[log_box, status_box, log_timer])
+                          outputs=[log_box, status_box, log_timer, metrics_box])
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
