@@ -137,6 +137,11 @@ dmypy.json
 # Local Claude Code tooling
 .claude/
 
+# Codemap bookkeeping (regenerated every session, no real content)
+.codemap/state.json
+.codemap/watch.pid
+.codemap/status
+
 # Training artifacts (generated each run)
 runs/
 training_curves.png
