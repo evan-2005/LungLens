@@ -68,14 +68,22 @@ CONFIDENCE_THRESHOLD = 0.60     # Below this top-class probability, report Uncer
 OVERLAY_MIN_PROB = 0.15         # Do not draw an overlay for a class this improbable
 HEATMAP_FLOOR = 0.35            # Hide diffuse low activation so healthy areas stay clean
 MIN_REGION_AREA_FRAC = 0.003    # Drop overlay specks smaller than 0.3% of the image
+# Every Covid-19 image comes from RICORD, which burns annotations ("PORTABLE
+# SEMI-ERECT", laterality markers) into the outer margin. Because that text is
+# unique to one class's source, the classifier can shortcut on it instead of on
+# lung pathology (visible as Grad-CAM lighting up an empty image corner). Cropping
+# this fraction off each edge before resize denies the shortcut. Applied
+# identically at train and inference time. Kept modest so the lung apices (where
+# TB tends to show) survive.
+BORDER_CROP_FRAC = 0.08
 OVERLAY_COLOR = (0, 113, 227)  # RGB clinical blue used for the segmentation overlay
 AUTO_OVERLAY = "Auto (predicted class)"
 
 # Recommended run size for fine-tuning the DenseNet classifier. Use as much of
-# the ~11k-image pool as the machine can afford: the minority classes (TB ~6%,
-# Covid ~9%) only become well represented in the val/test folds at scale. Early
+# the ~33k-image pool as the machine can afford: the minority classes (TB ~3%,
+# Covid ~14%) only become well represented in the val/test folds at scale. Early
 # stopping means over-requesting epochs is cheap, so aim high and let it stop.
-RECOMMENDED_SAMPLES = 10000
+RECOMMENDED_SAMPLES = 20000
 RECOMMENDED_EPOCHS = 20
 RECOMMENDED_BATCH = 16
 RECOMMENDED_LR = 1e-4
@@ -83,6 +91,24 @@ RECOMMENDED_LR = 1e-4
 
 def _normalize_transform():
     return transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
+
+
+class BorderCrop:
+    """Crop a fixed fraction off each edge of a PIL image.
+
+    Defined at module level (not a lambda) so it stays picklable for DataLoader
+    workers under Windows spawn. See BORDER_CROP_FRAC for why the crop exists.
+    """
+    def __init__(self, frac=BORDER_CROP_FRAC):
+        self.frac = frac
+
+    def __call__(self, img):
+        w, h = img.size
+        dx, dy = int(round(w * self.frac)), int(round(h * self.frac))
+        # Guard against a degenerate crop on a tiny image.
+        if w - 2 * dx < 1 or h - 2 * dy < 1:
+            return img
+        return img.crop((dx, dy, w - dx, h - dy))
 
 
 def generate_pseudo_mask(gray_resized):
@@ -373,7 +399,15 @@ def get_dataset_paths():
     tb  = kagglehub.dataset_download("tawsifurrahman/tuberculosis-tb-chest-xray-dataset")
     pn  = kagglehub.dataset_download("pcbreviglieri/pneumonia-xray-images")
     cov = kagglehub.dataset_download("raddar/ricord-covid19-xray-positive-tests")
-    return tb, pn, cov
+    # Second source spanning Covid / Normal / Pneumonia (Lung Opacity + Viral
+    # Pneumonia). Its whole point is decorrelation: because Covid now also comes
+    # from here (not only RICORD) and this one source carries every disease, the
+    # scanner/source signature stops being a valid shortcut for the label.
+    radio = kagglehub.dataset_download("tawsifurrahman/covid19-radiography-database")
+    # Shenzhen TB set: a SECOND source for Tuberculosis (the one class the
+    # radiography set lacks), so TB too is no longer tied to a single dataset.
+    shenzhen = kagglehub.dataset_download("raddar/tuberculosis-chest-xrays-shenzhen")
+    return tb, pn, cov, radio, shenzhen
 
 
 def _label_from_folder(rel_parts, folder_map):
@@ -422,17 +456,22 @@ _TB_FOLDERS   = {"normal": 0, "tuberculosis": 2}
 _PNEU_FOLDERS = {"normal": 0, "opacity": 1, "pneumonia": 1}
 _CUSTOM_FOLDERS = {"normal": 0, "pneumonia": 1, "opacity": 1,
                    "tuberculosis": 2, "tb": 2, "covid": 3, "covid-19": 3}
+# COVID-19 Radiography Database class folders. Lung Opacity and Viral Pneumonia
+# both fold into the Pneumonia class (label 1), matching how the pneumonia set's
+# "opacity" folder is treated.
+_RADIO_FOLDERS = {"covid": 3, "normal": 0, "viral pneumonia": 1, "lung_opacity": 1}
 
 
 def collect_dataset():
     """
     Walk every dataset and return one record per image as parallel lists:
     (paths, labels, groups, sources). `groups` feeds a patient-grouped split;
-    `sources` lets us report per-source accuracy as a confounding probe, since
-    each disease comes from exactly one dataset and a model can otherwise score
-    well by recognising the scanner rather than the pathology.
+    `sources` lets us report per-source accuracy as a confounding probe. Covid
+    and Pneumonia are drawn from two sources each (and the radiography set spans
+    every disease), so source no longer perfectly predicts the label the way it
+    did when each class came from a single dataset.
     """
-    tb_base, pn_base, cov_base = get_dataset_paths()
+    tb_base, pn_base, cov_base, radio_base, shenzhen_base = get_dataset_paths()
     paths, labels, groups, sources = [], [], [], []
 
     def add(f, label, source):
@@ -466,6 +505,30 @@ def collect_dataset():
         if "midrc" not in f.lower():
             continue
         add(f, 3, "covid_ds")
+
+    # COVID-19 Radiography Database: {COVID,Lung_Opacity,Normal,Viral Pneumonia}/
+    # {images,masks}/*.png. Take ONLY the X-rays under images/; the masks/ folder
+    # holds lung segmentation masks that share the class-folder ancestor and would
+    # otherwise be mislabelled as chest films.
+    for f in glob.glob(os.path.join(radio_base, "**", "*.*"), recursive=True):
+        if not f.lower().endswith(IMAGE_EXTS):
+            continue
+        rel = os.path.relpath(f, radio_base).split(os.sep)
+        rel_lower = [p.lower() for p in rel]
+        if "images" not in rel_lower or "masks" in rel_lower:
+            continue
+        label = _label_from_folder(rel, _RADIO_FOLDERS)
+        if label is not None:
+            add(f, label, "radiography_db")
+
+    # Shenzhen TB set encodes the label in the filename suffix, not in a folder:
+    # CHNCXR_<id>_0 = normal, CHNCXR_<id>_1 = TB-positive.
+    for f in glob.glob(os.path.join(shenzhen_base, "**", "*.png"), recursive=True):
+        stem = os.path.splitext(os.path.basename(f))[0]
+        m = re.match(r"CHNCXR_\d+_([01])$", stem)
+        if not m:
+            continue
+        add(f, 2 if m.group(1) == "1" else 0, "shenzhen_tb")
 
     custom_base = os.path.join(os.path.dirname(__file__), "custom_dataset")
     if os.path.exists(custom_base):
@@ -550,6 +613,7 @@ def build_transforms():
     rather than by pathology.
     """
     train_tf = transforms.Compose([
+        BorderCrop(),
         transforms.Resize((IMG_SIZE + 32, IMG_SIZE + 32)),
         transforms.RandomResizedCrop(IMG_SIZE, scale=(0.75, 1.0), ratio=(0.9, 1.1)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -560,6 +624,7 @@ def build_transforms():
         _normalize_transform(),
     ])
     eval_tf = transforms.Compose([
+        BorderCrop(),
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
         _normalize_transform(),
@@ -1201,6 +1266,11 @@ def predict_image(image, target_class_name):
         gr.Warning("Uploaded image appears to be empty.")
         return "", {}, gr.update(value=None)
 
+    # Match the training pipeline: strip the annotated outer margin so inference
+    # sees the same framing the model was trained on. Crop the PIL image here
+    # (not inside tf) so the displayed image and heatmap overlay align with it.
+    image = BorderCrop()(image)
+
     try:
         tf = transforms.Compose([
             transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -1673,7 +1743,7 @@ with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
                         "automatically while a run is active.")
             with gr.Row():
                 with gr.Column(scale=1):
-                    num_samples_slider = gr.Slider(200, 12000, value=RECOMMENDED_SAMPLES,
+                    num_samples_slider = gr.Slider(200, 32000, value=RECOMMENDED_SAMPLES,
                                                    step=200, label="Dataset size (images to use)")
                     epochs_slider      = gr.Slider(1, 40, value=RECOMMENDED_EPOCHS, step=1,
                                                    label="Max epochs (early-stops on plateau)")

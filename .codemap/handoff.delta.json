@@ -1,10 +1,26 @@
 {
-  "changed": [],
-  "risk_files": [],
+  "changed": [
+    {
+      "path": "app.py",
+      "hash": "5d655e3de735a01c238a9cbe7c081e8a71a4593b6b5b31ef9e3fbaf3c99d198f",
+      "size": 82391,
+      "status": "modified"
+    }
+  ],
+  "risk_files": [
+    {
+      "path": "app.py",
+      "importers": 2,
+      "is_hub": false,
+      "reason": "imported by 2 files"
+    }
+  ],
   "recent_events": [],
-  "next_steps": [],
+  "next_steps": [
+    "Review downstream dependents for high-impact files before merge.",
+    "Run tests covering changed files before handoff."
+  ],
   "open_questions": [
-    "No changed files detected vs origin/main. Confirm the base ref and branch state.",
-    "Live watch state was unavailable; timeline may be incomplete."
+    "No recent timeline events matched the lookback window."
   ]
 }
