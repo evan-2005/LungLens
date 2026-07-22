@@ -1,25 +1,32 @@
 # LungLens
 
-LungLens is a local, CPU-friendly web application that classifies chest X-rays across four categories (Normal, Pneumonia, Tuberculosis, Covid-19) and shows a Grad-CAM attention heatmap explaining each prediction.
+LungLens is a local web application that classifies chest X-rays across four categories (Normal, Pneumonia, Tuberculosis, Covid-19) and shows a Grad-CAM attention heatmap explaining each prediction. It runs on CPU or, when available, an NVIDIA GPU (CUDA is auto-detected).
 
-It runs a hybrid of two models. A **DenseNet-121** classifier makes the diagnostic call, and a **Multi-Task U-Net** provides segmentation and a fallback path. Classification comes from the DenseNet because it discriminates the four classes reliably; the visualization is a Grad-CAM heatmap over the region that drove the prediction. The interface is built with [Gradio](https://www.gradio.app/) using a restrained, professional clinical theme.
+It runs a hybrid of two models. A **DenseNet-121** classifier makes the diagnostic call, and a **Multi-Task U-Net** provides a disease-segmentation overlay and a fallback path. Both can be **trained end to end from the app**: Stage 1 retrains the DenseNet that serves predictions, and Stage 2 (optional) distils that classifier's Grad-CAM into the U-Net so the overlay marks the region the classifier actually used. The interface is built with [Gradio](https://www.gradio.app/) using a restrained, professional clinical theme.
 
 > Research and educational tool only. Not a certified medical device. See the Disclaimer at the end. For a candid log of the problems hit while building this and what is worth improving next, see [DEVELOPMENT_NOTES.md](DEVELOPMENT_NOTES.md).
+
+## Guarding against dataset shortcuts
+
+An early version learned a shortcut: because each disease originally came from a single dataset, the model could "diagnose" Covid-19 from the burned-in `PORTABLE SEMI-ERECT` text in the corner of the RICORD scans rather than from the lungs. Two changes counter this:
+
+- **Multiple sources per class.** Every class now draws from at least two independent datasets, so a scanner or source "fingerprint" no longer predicts the label. A per-source accuracy probe is printed at the end of every run so you can check whether the model scores evenly across sources (evidence it learned pathology) rather than leaning on one.
+- **Border crop.** A fixed 8% edge crop is applied identically at train and inference time, removing the corner annotations and laterality markers where these shortcuts live.
 
 ---
 
 ## Key Features
 
-- **Accurate classification.** The DenseNet-121 classifier drives the prediction and separates the four classes cleanly on held-out images.
+- **Trains the served classifier.** Stage 1 fine-tunes the DenseNet-121 that actually drives predictions on the Analysis tab, not a frozen checkpoint. The best model by validation macro-F1 is saved to disk and hot-swapped into the live app when the run finishes, no restart needed.
+- **Grad-CAM-distilled disease segmentation.** Stage 2 (optional) trains the U-Net to reproduce the classifier's Grad-CAM localisation in a single forward pass, so the overlay marks where the classifier looked rather than tracing anatomy.
+- **Multi-source, confound-aware data.** Five Kaggle datasets are merged so each class spans multiple sources; a per-source accuracy probe flags source-based shortcuts (see above).
 - **Uncertainty handling.** When the top class is below a confidence threshold (60 percent), the result is reported as Uncertain rather than a misleading confident label.
 - **Grad-CAM attention heatmap.** Every result shows a translucent heatmap of where the model focused. For a confident abnormal finding, a crisp region outline is added on top. Low activation is suppressed so healthy tissue stays clean.
 - **Sensible overlay for healthy scans.** On a Normal result the heatmap shows where the model assessed for the most likely abnormal class ("none abnormal"), instead of an alarming and unhelpful map over central anatomy.
-- **No first-run freeze.** Both models load and run a warm-up pass at startup, so the first user inference is fast instead of stalling on CPU kernel compilation.
-- **Multi-Task U-Net for segmentation.** A single U-Net forward pass produces class logits and a 4-channel segmentation mask, used as the fallback when the DenseNet is unavailable.
-- **Weakly supervised U-Net training.** No pixel-level annotations are needed. Anatomically informed pseudo-masks are generated from each image (CLAHE contrast equalisation, Otsu thresholding, an elliptical lung-field region, and morphological cleanup).
-- **Class-weighted, regularised training.** Inverse-frequency class weights counter dataset imbalance, and dropout on the classification head reduces overfitting to the majority classes.
-- **In-browser training dashboard.** Train the U-Net on Kaggle datasets without a terminal. Logs and status refresh automatically while a run is in progress.
-- **Learning-rate scheduling.** ReduceLROnPlateau lowers the learning rate when validation Dice stops improving.
+- **Honest evaluation.** A patient-grouped train/val/test split keeps every patient on one side of the split, and the headline accuracy is reported on a held-out test set that was never used for checkpoint selection.
+- **Class-weighted, regularised training.** Inverse-frequency class weights counter dataset imbalance; geometric and photometric augmentation plus early stopping (on validation macro-F1) reduce overfitting.
+- **Runs on CPU or GPU.** CUDA is auto-detected. Both models load and run a warm-up pass at startup so the first inference is fast.
+- **In-browser or headless training.** Train from the Training tab (logs refresh live), or run `train_run.py` from the terminal for an unattended job that survives with no browser open.
 
 ---
 
@@ -28,13 +35,15 @@ It runs a hybrid of two models. A **DenseNet-121** classifier makes the diagnost
 Each request runs the hybrid pipeline:
 
 ```
-Upload -> resize 224x224, ImageNet normalise
+Upload -> 8% border crop, resize 224x224, ImageNet normalise
    |
    |-- DenseNet-121 --> softmax --> class probabilities   (the prediction)
    |
    |-- top prob < 60%? --> report "Uncertain"
    |
-   |-- Grad-CAM on DenseNet for the visualised class --> attention map
+   |-- overlay source:
+   |     Grad-CAM-distilled U-Net disease mask, if available   (one forward pass)
+   |     else live Grad-CAM on the DenseNet for the visualised class
    |        (Normal prediction -> map the most likely ABNORMAL class instead)
    |
    +-- render full-resolution heatmap
@@ -63,31 +72,52 @@ Input (3 x 224 x 224)
    Segmentation masks (4 x 224 x 224)
 ```
 
-Loss during U-Net training:
+### Two-stage training
+
+Training runs in two stages, both from the app or `train_run.py`:
+
+**Stage 1, DenseNet-121 classifier (the served model).** Fine-tuned with
+Cross-Entropy under inverse-frequency class weights (normalised to mean 1.0) to
+counter imbalance. Selection, scheduling, and early stopping all key on
+**validation macro-F1** (the right target under heavy class imbalance, where raw
+accuracy is misleading). The best checkpoint is saved as `chest_model_4class.pth`,
+and its metrics (including the held-out test report and per-source probe) go to
+`chest_classifier_metrics.json`.
+
+**Stage 2, Grad-CAM-distilled U-Net (optional).** The trained classifier's
+Grad-CAM maps become segmentation targets, and the U-Net learns to reproduce them
+in a single forward pass. Its loss is:
 
 ```
 Total Loss = CrossEntropyLoss(class, class_weights) + 2.0 * DiceBCELoss(mask)
 DiceBCELoss = BCE(pred, target) + DiceLoss(pred, target)
 ```
 
-`class_weights` are inverse-frequency weights normalised to mean 1.0. The best
-checkpoint (highest validation Dice) is saved as `chest_segmentation_model.pth`.
+The best U-Net by validation Dice is saved as `chest_segmentation_model.pth`. On
+the Analysis tab the app prefers this disease mask for the overlay when the
+metrics file marks it Grad-CAM-distilled, and falls back to live Grad-CAM
+otherwise.
 
-> Note: training in the app trains the U-Net only. The DenseNet-121 classifier
-> (`chest_model_4class.pth`) that drives predictions is a pre-trained checkpoint
-> and is not retrained here.
+> Note: unlike earlier versions, the DenseNet classifier that drives predictions
+> **is** retrained here. Stage 1 is the model served on the Analysis tab.
 
 ---
 
 ## Datasets
 
-Datasets are downloaded automatically via [KaggleHub](https://github.com/Kaggle/kagglehub) on first training. No manual download is required. Labels are inferred from file and folder names, so no CSV is needed.
+Datasets are downloaded automatically via [KaggleHub](https://github.com/Kaggle/kagglehub) on first training. No manual download is required. Labels are inferred from file and folder names (and, for the Shenzhen set, the filename suffix), so no CSV is needed.
+
+Five sources are merged, chosen so **every class comes from at least two independent datasets**. This is the core of the confound mitigation described above. About **32,900 images** in total.
 
 | # | Dataset | Kaggle Source | Labels Used |
 |---|---------|---------------|-------------|
 | 1 | Tuberculosis Chest X-ray | [tawsifurrahman/tuberculosis-tb-chest-xray-dataset](https://www.kaggle.com/datasets/tawsifurrahman/tuberculosis-tb-chest-xray-dataset) | `normal`, `tuberculosis` |
 | 2 | Pneumonia X-Ray Images | [pcbreviglieri/pneumonia-xray-images](https://www.kaggle.com/datasets/pcbreviglieri/pneumonia-xray-images) | `normal`, `pneumonia` |
-| 3 | COVID-19 Chest X-ray Positive Tests | [raddar/ricord-covid19-xray-positive-tests](https://www.kaggle.com/datasets/raddar/ricord-covid19-xray-positive-tests) | `covid-19` |
+| 3 | COVID-19 Chest X-ray Positive Tests (RICORD) | [raddar/ricord-covid19-xray-positive-tests](https://www.kaggle.com/datasets/raddar/ricord-covid19-xray-positive-tests) | `covid-19` |
+| 4 | COVID-19 Radiography Database | [tawsifurrahman/covid19-radiography-database](https://www.kaggle.com/datasets/tawsifurrahman/covid19-radiography-database) | `normal`, `pneumonia` (Lung Opacity + Viral Pneumonia), `covid-19` |
+| 5 | Shenzhen Tuberculosis Chest X-rays | [raddar/tuberculosis-chest-xrays-shenzhen](https://www.kaggle.com/datasets/raddar/tuberculosis-chest-xrays-shenzhen) | `normal`, `tuberculosis` |
+
+Approximate class balance after merging: Normal ~15,600, Pneumonia ~11,600, Covid-19 ~4,600, Tuberculosis ~1,000. Public TB chest-X-ray data is scarce, so TB is the smallest class; inverse-frequency class weighting compensates in the loss.
 
 ---
 
@@ -97,8 +127,8 @@ Datasets are downloaded automatically via [KaggleHub](https://github.com/Kaggle/
 
 - Python 3.8 or newer (tested on 3.11)
 - A [Kaggle API key](https://www.kaggle.com/docs/api) at `~/.kaggle/kaggle.json` (required only for training)
-- Roughly 11 GB of disk space for datasets (about 11,000 images)
-- Optional but recommended: an NVIDIA GPU with CUDA. Training on CPU is slow.
+- Roughly 15 GB of disk space for datasets (about 33,000 images across five sources)
+- Optional but recommended: an NVIDIA GPU with CUDA. Training the classifier on the full dataset is slow on CPU.
 
 ### 1. Clone the repository
 
@@ -113,11 +143,13 @@ cd LungLens
 pip install torch torchvision gradio opencv-python numpy scikit-learn kagglehub pillow matplotlib
 ```
 
-For a GPU build (CUDA 11.8 example; check [pytorch.org](https://pytorch.org) for your version):
+For a GPU build (CUDA 12.4 example; check [pytorch.org](https://pytorch.org) for the build matching your driver, and run `nvidia-smi` to see the max CUDA version it supports):
 
 ```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 ```
+
+A `2.x.x+cpu` PyTorch build has no CUDA support compiled in, so `torch.cuda.is_available()` stays `False` even with a GPU present. Reinstall a `+cuXXX` build to use the GPU.
 
 ### 3. Launch the app
 
@@ -147,103 +179,90 @@ On startup the app loads both `chest_model_4class.pth` (the DenseNet classifier)
 ### Training
 
 1. Open the Training tab.
-2. Adjust the hyperparameters (see the guide below).
+2. Adjust the hyperparameters (see the guide below). Stage 2 (disease segmentation) can be toggled on or off.
 3. Click Start training. Training runs in a background thread.
 4. Status and logs refresh automatically while the run is active. A manual Refresh button is also available.
-5. The best U-Net by validation Dice is saved as `chest_segmentation_model.pth` and published for inference automatically when training finishes.
+5. When the run finishes, the retrained DenseNet (`chest_model_4class.pth`) and, if Stage 2 ran, the U-Net (`chest_segmentation_model.pth`) are published to the live app automatically. The Analysis tab uses them immediately, no restart needed.
+
+For a long unattended run, use the headless driver instead of the browser:
+
+```bash
+# num_samples epochs lr batch_size num_workers train_seg seg_cap seg_epochs
+python train_run.py 32000 40 1e-4 32 4 1 3000 10 > train_full.log 2>&1
+```
+
+It writes the same logs to `train_full.log`; follow them with `tail -f train_full.log` (or `Get-Content train_full.log -Wait -Tail 30` on Windows PowerShell).
 
 ---
 
 ## How to Train Effectively
 
-Training in the app improves the **U-Net** (segmentation quality and the fallback classifier). It does not change the DenseNet-121 that drives predictions in the Analysis tab.
+Training retrains the **DenseNet-121 classifier** that serves predictions, and optionally distils its Grad-CAM into the **disease-segmentation U-Net**.
 
 ### Step by step
 
 1. Ensure your Kaggle API key is at `~/.kaggle/kaggle.json`. The datasets download automatically on the first run.
-2. Open the Training tab and set Dataset size, Epochs, Batch size, and Learning rate (see the recommended values below).
-3. Click Start training. The datasets are collected, split into train and validation (stratified when class counts allow), and pseudo-masks are generated on the fly.
-4. Watch Status and the log panel. Each epoch reports train and validation accuracy and Dice, plus the current learning rate.
-5. When the run finishes, the best checkpoint by validation Dice is saved to `chest_segmentation_model.pth` and published to the live model, so the Analysis tab uses it immediately (no restart needed).
+2. Set Dataset size, Epochs, Batch size, Learning rate, and (optionally) the Stage 2 segmentation controls (see the recommended values below).
+3. Start training. The five datasets are collected, stratified-subsampled to the requested size, and split into train/val/test grouped by patient so no patient spans two splits.
+4. Watch the log. Each epoch reports train accuracy, validation accuracy, validation macro-F1, and the current learning rate. The best model by validation macro-F1 is checkpointed as it improves.
+5. When Stage 1 finishes, a held-out **test** report prints (per-class precision/recall, confusion matrix, and the **per-source accuracy probe**). If enabled, Stage 2 then trains the U-Net and both models are published to the live app.
 
 ### What happens under the hood
 
-Training is weakly supervised, so no pixel annotations are needed:
-
-1. **Pseudo-mask generation.** For each non-normal image, the grayscale scan is contrast-equalised (CLAHE), thresholded with Otsu, restricted to an elliptical lung-field region, and cleaned with morphological opening and closing. This produces an anatomically plausible target for the segmentation head.
-2. **Aligned augmentation.** Only photometric augmentation (brightness and contrast jitter) is applied during training. Geometric transforms are omitted because the pseudo-mask is derived from the original image, so rotating or flipping the input would misalign it with its target.
-3. **Class-weighted joint optimisation.** Classification loss (Cross-Entropy with inverse-frequency class weights) and segmentation loss (Dice-BCE) are combined with a 1:2 weighting and optimised together. Dropout on the classification head reduces overfitting to the majority classes.
-4. **Stability.** Gradients are clipped at `max_norm = 1.0`, NaN and Inf batches are skipped, and ReduceLROnPlateau halves the learning rate when validation Dice plateaus.
-5. **Safe publishing.** Training builds a local network and only swaps it into the live model after the run ends, so inference never sees a half-trained model.
+1. **Border crop + augmentation.** Every image is border-cropped 8%. Training adds geometric and photometric augmentation (random resized crop, flip, small rotation, brightness/contrast jitter, mild blur) to attack resolution and scanner cues that would otherwise let the model separate classes by their source dataset.
+2. **Class-weighted loss.** Cross-Entropy with inverse-frequency class weights (normalised to mean 1.0) counters the imbalance, so minority classes (Tuberculosis, Covid-19) are not drowned out.
+3. **Macro-F1 selection and scheduling.** Checkpoint selection, ReduceLROnPlateau, and early stopping (patience 4) all key on validation macro-F1, the honest target under a ~15:1 imbalance where accuracy misleads.
+4. **Stability.** Gradients are clipped at `max_norm = 1.0`, NaN/Inf batches are skipped, and checkpoints are written atomically (temp file + rename, with retry) so a file-lock never corrupts a save.
+5. **Safe publishing.** The best checkpoint is reloaded and only swapped into the live model after the run ends, so inference never sees a half-trained model.
 
 ### Recommended hyperparameters
 
 | Parameter | Recommended | Notes |
 |-----------|-------------|-------|
-| Dataset Size | 500 to 1000 for testing | Start small to validate the pipeline. More data generalises better but is slower. |
-| Epochs | 2 to 5 for testing | Validation Dice usually stabilises within a few epochs. |
+| Dataset Size | 500 to 1000 for a quick test; 20,000+ for a real run | Minority classes (especially TB) only get well represented at scale. Max is the full ~32,000. |
+| Max Epochs | 40 | Early stopping halts on a macro-F1 plateau, so over-requesting is cheap. |
 | Batch Size | 8 on CPU, 16 to 32 on GPU | Reduce if you hit out-of-memory errors. |
 | Learning Rate | 0.0001 | A stable starting point for Adam. The scheduler lowers it automatically. |
+| Data loader workers | 0 on CPU, 4+ on GPU | Higher keeps the GPU fed; on Windows the app handles worker spawn safely. |
+| Stage 2: segmentation images | 800 to 3000 | Grad-CAM targets to distil. More is slower but sharper. |
+| Stage 2: segmentation epochs | 6 to 12 | Not early-stopped. |
 
 Hyperparameters are validated before a run starts. Out-of-range values (for example a learning rate of 0 or a negative epoch count) are rejected with a clear message.
 
-### Training recipes by hardware
+### Reading the per-source probe
 
-Quick test (CPU):
-
-```
-Dataset Size : 500
-Epochs       : 2
-Batch Size   : 8
-Learning Rate: 0.0001
-```
-
-Validation (CPU):
-
-```
-Dataset Size : 1000
-Epochs       : 3
-Batch Size   : 8
-Learning Rate: 0.0001
-```
-
-Production (GPU):
-
-```
-Dataset Size : 5000
-Epochs       : 10
-Batch Size   : 16 to 32
-Learning Rate: 0.0001
-```
-
-Pseudo-labels limit the achievable Dice ceiling, so expect modest segmentation scores even on long runs.
+Because each disease now spans multiple sources, the per-source accuracy line at the end of a run is the real test of whether the model learned pathology. Roughly **even accuracy across sources** is the good outcome; a big gap (one source far higher than the rest) is a sign the model is still leaning on a source fingerprint.
 
 ### Reading the training logs
 
 Each epoch prints batch progress and a summary line:
 
 ```
-[Epoch 1/2] Training (100 batches)...
-  Train batch 20/100
+[Epoch 1/40] Training (702 batches)...
+  Train batch 140/702
   ...
-[Epoch 1/2] Validation (25 batches)...
-  Val batch 5/25
-  ...
-Epoch 1/2 | Train Acc: 72.50% | Train Dice: 0.3812 | Val Acc: 68.75% | Val Dice: 0.3541 | LR: 1.00e-04
---> Saved best model (Val Dice: 0.3541)
+Epoch 1/40 | Train Acc: 84.32% | Val Acc: 89.94% | Val macro-F1: 86.89% | LR: 1.00e-04
+--> Saved best classifier (Val macro-F1: 86.89%)
+...
+Held-out TEST | Acc: <acc>% | macro-F1: <f1>%
+Per-source accuracy (test): radiography_db=<acc>% (n=<count>), pneu_ds=<acc>% (n=<count>), ...
 ```
+
+(The first epoch numbers above are from a real run; the test/per-source line shows the format printed once Stage 1 finishes.)
 
 | Metric | Meaning | Target |
 |--------|---------|--------|
-| Train/Val Acc | Classification accuracy across 4 classes | Above 70 percent is good |
-| Train/Val Dice | Segmentation overlap, 0 to 1 | Above 0.30 is reasonable with pseudo-masks |
-| LR | Current learning rate | Drops when validation Dice plateaus |
+| Train/Val Acc | Classification accuracy across 4 classes | Rises steadily; watch the train/val gap for overfitting |
+| Val macro-F1 | Unweighted mean F1 across classes | The selection metric; fair to minority classes under imbalance |
+| Held-out TEST | Scores on data never used for selection | The honest headline number |
+| Per-source accuracy | Accuracy split by originating dataset | Should be roughly even across sources |
+| LR | Current learning rate | Drops when validation macro-F1 plateaus |
 
-The checkpoint with the highest validation Dice is saved, not the lowest loss, because Dice directly measures segmentation quality.
+The checkpoint with the highest validation macro-F1 is saved, not the lowest loss, because macro-F1 is the metric that stays honest under heavy class imbalance.
 
 ### TensorBoard
 
-Training writes scalars (loss, accuracy, Dice, and learning rate) to `runs/`. View them with:
+Training writes scalars (loss, accuracy, macro-F1, Dice, and learning rate) to `runs/`. View them with:
 
 ```bash
 tensorboard --logdir runs
@@ -253,9 +272,9 @@ tensorboard --logdir runs
 
 **Out-of-memory error.** Reduce Batch Size, reduce Dataset Size, and close other applications.
 
-**Very slow training.** You are likely on CPU. Install a CUDA build of PyTorch, or reduce Batch Size and Dataset Size.
+**Very slow training.** You are likely on CPU, or `torch` is a `+cpu` build. Install a CUDA build of PyTorch (see Setup), and raise Data loader workers.
 
-**Dice stuck low.** Pseudo-masks are inherently noisy. Use more images and more epochs to improve.
+**Accuracy looks suspiciously perfect.** Check the per-source probe. A near-100% score concentrated in one source can mean the model is exploiting a source shortcut rather than pathology.
 
 **No images found.** Confirm the Kaggle key at `~/.kaggle/kaggle.json`, check your internet connection, and clear `~/.cache/kagglehub` if a download was interrupted.
 
@@ -295,16 +314,18 @@ This checks the model forward pass, loss computation, Dice calculation, dataset 
 
 ```
 LungLens/
-  app.py                        Main Gradio app: model, training, inference, UI
+  app.py                        Main Gradio app: models, training, inference, UI
+  train_run.py                  Headless training driver for unattended runs
   debug_training.py             System diagnostics script
   test_gradcam.py               Quick inference smoke test
-  chest_model_4class.pth        DenseNet-121 classifier (fallback)
+  chest_model_4class.pth        DenseNet-121 classifier (the served model)
   chest_segmentation_model.pth  Multi-Task U-Net (loaded if present)
+  chest_classifier_metrics.json Metrics for the saved checkpoint (test + per-source)
   custom_dataset/               Optional: drop your own X-rays here
   model/
     CNNModel.py                 Standalone Multi-Task U-Net definition
-    DatasetGenerator.py         Dataset with pseudo-mask generation
-    TrainerTester.py            Training and evaluation loops
+    DatasetGenerator.py         Dataset with pseudo-mask generation (legacy)
+    TrainerTester.py            Training and evaluation loops (legacy)
     Main.py                     Azure ML training entry point
   data/
     batch_download_zips.py
@@ -315,20 +336,21 @@ LungLens/
 
 | Class or function | Purpose |
 |-------------------|---------|
-| `CNNModel` | DenseNet-121 classifier. The primary prediction model. |
-| `MultiTaskUNet` | Encoder-decoder returning (class logits, segmentation mask). Segmentation and fallback. |
+| `CNNModel` | DenseNet-121 classifier. The primary prediction model, retrained in Stage 1. |
+| `MultiTaskUNet` | Encoder-decoder returning (class logits, segmentation mask). Overlay and fallback. |
 | `DoubleConv` | Double convolution block with BatchNorm and ReLU. |
-| `DiceBCELoss` | Combined Dice and Binary Cross-Entropy loss for segmentation. |
-| `dice_coefficient` | Measures segmentation overlap, 0 to 1. |
-| `generate_pseudo_mask` | Builds an anatomically informed pseudo-mask from a grayscale scan. |
-| `SegmentationDataset` | Returns (image, pseudo-mask, label) with masks generated on the fly. |
+| `DiceBCELoss` / `dice_coefficient` | Combined Dice+BCE loss and overlap metric for segmentation. |
+| `BorderCrop` | Crops a fixed fraction off each edge to remove burned-in corner annotations. |
+| `collect_dataset` | Merges the five Kaggle sources into (paths, labels, patient groups, sources). |
+| `stratified_subsample` / `patient_grouped_split` | Class-balanced subsampling and a leak-free train/val/test split. |
 | `GradCAM` | Extracts Grad-CAM attention heatmaps from the DenseNet. |
-| `warm_up_model` | Runs a dummy forward pass so the first real inference is fast. |
-| `load_models_from_disk` | Loads and warms up both checkpoints; returns (seg_model, cls_model). |
-| `build_heatmap` | Blends a translucent, floor-suppressed Grad-CAM heatmap at full resolution. |
-| `clean_region` / `outline_region` | Threshold, despeckle, and outline a confident region of interest. |
-| `predict_image` | Inference: classify with the DenseNet, visualise with Grad-CAM, apply gating. |
-| `run_training_thread` | Background U-Net training loop with per-batch logging and safe publishing. |
+| `build_gradcam_targets` | Turns the classifier's Grad-CAM maps into Stage-2 segmentation targets. |
+| `train_segmentation_head` | Distils Grad-CAM into the U-Net (Stage 2). |
+| `save_checkpoint_atomic` | Writes a checkpoint via temp file + atomic rename, with retry. |
+| `warm_up_model` / `load_models_from_disk` | Warm-up pass and startup loading of both checkpoints. |
+| `build_heatmap` / `clean_region` / `outline_region` | Render the overlay and outline a confident region. |
+| `predict_image` | Inference: classify with the DenseNet, overlay via distilled U-Net or Grad-CAM. |
+| `run_training_thread` | Two-stage training loop with logging, held-out test, and safe publishing. |
 
 ---
 
