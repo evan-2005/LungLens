@@ -1,78 +1,73 @@
 {
-  "val_acc": 75.82417582417582,
-  "val_f1": 52.96854942233633,
-  "train_acc": 44.86873508353222,
-  "epoch": 1,
-  "epochs_requested": 1,
+  "val_acc": 95.98,
+  "val_f1": 95.8,
+  "train_acc": 96.66,
+  "epoch": 9,
+  "epochs_requested": 40,
+  "early_stopped": true,
   "val_per_class_recall": {
-    "Normal": 75.0,
-    "Pneumonia": 91.8918918918919,
-    "Tuberculosis": 0.0,
-    "Covid-19": 50.0
+    "Normal": 98.88293118856122,
+    "Pneumonia": 94.28571428571428,
+    "Tuberculosis": 96.1038961038961,
+    "Covid-19": 93.33333333333333
   },
-  "train_samples": 419,
-  "val_samples": 91,
-  "test_samples": 90,
+  "train_samples": 22435,
+  "val_samples": 4773,
+  "test_samples": 4792,
   "batch_size": 32,
   "lr": 0.0001,
-  "class_counts": {
-    "Normal": 202,
-    "Pneumonia": 145,
-    "Tuberculosis": 10,
-    "Covid-19": 62
-  },
-  "saved_at": "2026-07-22T10:44:07",
-  "test_acc": 60.0,
-  "test_f1": 41.883116883116884,
+  "test_acc": 96.36894824707846,
+  "test_f1": 96.4626152457712,
   "test_per_source_acc": {
     "tb_ds": {
-      "acc": 58.8235294117647,
-      "n": 17
+      "acc": 99.34102141680395,
+      "n": 607
     },
     "pneu_ds": {
-      "acc": 80.0,
-      "n": 20
+      "acc": 98.59813084112149,
+      "n": 856
     },
     "covid_ds": {
-      "acc": 66.66666666666667,
-      "n": 3
+      "acc": 100.0,
+      "n": 112
     },
     "radiography_db": {
-      "acc": 55.319148936170215,
-      "n": 47
+      "acc": 95.06769825918762,
+      "n": 3102
     },
     "shenzhen_tb": {
-      "acc": 0.0,
-      "n": 3
+      "acc": 95.65217391304348,
+      "n": 115
     }
   },
   "confusion_matrix": [
     [
+      2213,
       24,
-      16,
-      0,
-      2
+      1,
+      0
     ],
     [
+      90,
+      1683,
       1,
-      26,
-      1,
-      2
-    ],
-    [
-      0,
-      2,
-      0,
-      3
+      11
     ],
     [
       5,
-      3,
       1,
-      4
+      148,
+      0
+    ],
+    [
+      35,
+      6,
+      0,
+      574
     ]
   ],
   "segmentation": "gradcam_distilled",
-  "seg_val_dice": 0.00010628639574861154,
-  "seg_train_images": 40
+  "seg_val_dice": 0.20247552395332669,
+  "seg_train_images": 3000,
+  "saved_at": "2026-07-22T13:08:01"
 }

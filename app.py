@@ -76,6 +76,11 @@ MIN_REGION_AREA_FRAC = 0.003    # Drop overlay specks smaller than 0.3% of the i
 # identically at train and inference time. Kept modest so the lung apices (where
 # TB tends to show) survive.
 BORDER_CROP_FRAC = 0.08
+# Stage-2 U-Net training is memory-heavy at full resolution. Cap its batch so it
+# fits alongside a live CUDA context on a small (6 GB) GPU; the classifier's
+# larger batch would overflow VRAM and spill to shared system memory, which stalls
+# training. See train_segmentation_head.
+SEG_MAX_BATCH = 8
 OVERLAY_COLOR = (0, 113, 227)  # RGB clinical blue used for the segmentation overlay
 AUTO_OVERLAY = "Auto (predicted class)"
 
@@ -759,8 +764,18 @@ def train_segmentation_head(cls_net, train_paths, train_labels, eval_tf,
     # Force workers=0 here: the seg data is already in-memory GPU-bound tensors,
     # so DataLoader workers add nothing, and spawning them alongside the live
     # CUDA context is exactly what triggers "CUDA error: unknown error" on Windows.
-    tl = DataLoader(train_sub, batch_size=batch_size, shuffle=True, num_workers=0)
-    vl = DataLoader(val_sub, batch_size=batch_size, shuffle=False, num_workers=0)
+    seg_batch = min(batch_size, SEG_MAX_BATCH)
+    tl = DataLoader(train_sub, batch_size=seg_batch, shuffle=True, num_workers=0)
+    vl = DataLoader(val_sub, batch_size=seg_batch, shuffle=False, num_workers=0)
+
+    # The Grad-CAM targets are already built, so the classifier is no longer
+    # needed on the GPU during U-Net training. Park it on the CPU (restored before
+    # returning) and clear the cache so the U-Net has the VRAM to itself; otherwise
+    # both models resident at once overflow a 6 GB card and training stalls.
+    cls_home = next(cls_net.parameters()).device
+    cls_net.to("cpu")
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
     seg_net = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
     seg_crit = DiceBCELoss()
@@ -797,6 +812,11 @@ def train_segmentation_head(cls_net, train_paths, train_labels, eval_tf,
 
     if best_state is not None:
         seg_net.load_state_dict(best_state)
+    # Restore the classifier to where the caller expects it (it publishes and
+    # warms up eval_net on the GPU after this returns).
+    cls_net.to(cls_home)
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
     return seg_net, best_dice
 
 
