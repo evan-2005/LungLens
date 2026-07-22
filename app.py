@@ -307,6 +307,32 @@ def dice_coefficient(y_pred, y_true, smooth=1e-6):
 
 
 # Training metrics persistence
+def save_checkpoint_atomic(state_dict, path, retries=5, delay=1.5):
+    """Save a state_dict durably: write to a temp file, then atomically replace
+    the target. os.replace is atomic on Windows and never leaves a half-written
+    checkpoint. Retries a few times because Windows Defender can briefly lock a
+    freshly written .pth while it scans, which surfaces as "cannot be opened".
+    Raises the last error only if every attempt fails.
+    """
+    import time
+    tmp = f"{path}.tmp{os.getpid()}"
+    last_err = None
+    for attempt in range(retries):
+        try:
+            torch.save(state_dict, tmp)
+            os.replace(tmp, path)
+            return
+        except (OSError, RuntimeError) as e:
+            last_err = e
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+            time.sleep(delay)
+    raise last_err
+
+
 def save_training_metrics(metrics):
     """Record how the saved checkpoint scored. Never raises, a failure to write
     the report must not fail an otherwise successful run."""
@@ -730,8 +756,11 @@ def train_segmentation_head(cls_net, train_paths, train_labels, eval_tf,
     n_train = len(ds) - n_val
     train_sub, val_sub = torch.utils.data.random_split(
         ds, [n_train, n_val], generator=torch.Generator().manual_seed(42))
-    tl = DataLoader(train_sub, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    vl = DataLoader(val_sub, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    # Force workers=0 here: the seg data is already in-memory GPU-bound tensors,
+    # so DataLoader workers add nothing, and spawning them alongside the live
+    # CUDA context is exactly what triggers "CUDA error: unknown error" on Windows.
+    tl = DataLoader(train_sub, batch_size=batch_size, shuffle=True, num_workers=0)
+    vl = DataLoader(val_sub, batch_size=batch_size, shuffle=False, num_workers=0)
 
     seg_net = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
     seg_crit = DiceBCELoss()
@@ -814,12 +843,16 @@ def run_training_thread(num_samples, epochs, lr, batch_size, num_workers=0,
         val_ds   = ChestXRayDataset(val_paths,   val_labels,   transform=eval_tf)
         test_ds  = ChestXRayDataset(test_paths,  test_labels,  transform=eval_tf)
 
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                                  num_workers=num_workers)
-        val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
-                                  num_workers=num_workers)
-        test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False,
-                                  num_workers=num_workers)
+        # pin_memory speeds the host->GPU copy. We deliberately do NOT use
+        # persistent_workers: keeping the classifier's worker pool alive bleeds
+        # those processes into the Stage-2 seg training and corrupts the CUDA
+        # context there ("CUDA error: unknown error" on backward). Letting the
+        # workers tear down after each epoch keeps the seg stage clean.
+        dl_kw = dict(num_workers=num_workers,
+                     pin_memory=(device.type == "cuda"))
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **dl_kw)
+        val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, **dl_kw)
+        test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, **dl_kw)
 
         training_logs.append("Initializing DenseNet-121 classifier (ImageNet-pretrained)...")
         net = CNNModel(classCount=NUM_CLASSES, isTrained=True).to(device)
@@ -910,7 +943,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size, num_workers=0,
             if val_f1 > best_val_f1:
                 best_val_f1 = val_f1
                 epochs_since_improve = 0
-                torch.save(net.state_dict(), model_path)
+                save_checkpoint_atomic(net.state_dict(), model_path)
                 per_class_recall = recall_score(
                     y_true, y_pred, labels=list(range(NUM_CLASSES)),
                     average=None, zero_division=0).tolist()
@@ -968,14 +1001,19 @@ def run_training_thread(num_samples, epochs, lr, batch_size, num_workers=0,
                 "test_per_source_acc": src_acc,
                 "confusion_matrix": cm.tolist(),
             })
-            training_logs.append(f"Held-out TEST | Acc: {test_acc:.2f}% | macro-F1: {test_f1:.2f}%")
-            training_logs.append("Per-class report (test):\n" + report)
-            training_logs.append(
+            # Both append (for the Training-tab log) and print (so a headless run
+            # captures the held-out test + per-source confound probe in stdout).
+            report_lines = [
+                f"Held-out TEST | Acc: {test_acc:.2f}% | macro-F1: {test_f1:.2f}%",
+                "Per-class report (test):\n" + report,
                 "Per-source accuracy (test): "
-                + ", ".join(f"{s}={v['acc']:.1f}% (n={v['n']})" for s, v in src_acc.items()))
-            training_logs.append(
+                + ", ".join(f"{s}={v['acc']:.1f}% (n={v['n']})" for s, v in src_acc.items()),
                 "Confusion matrix (rows=true, cols=pred; order "
-                + ", ".join(CLASSES) + "):\n" + str(cm))
+                + ", ".join(CLASSES) + "):\n" + str(cm),
+            ]
+            for _line in report_lines:
+                training_logs.append(_line)
+                print(_line, flush=True)
             writer.add_scalar("Accuracy/test", test_acc, 0)
             writer.add_scalar("F1/test_macro", test_f1, 0)
             writer.flush()
@@ -991,7 +1029,7 @@ def run_training_thread(num_samples, epochs, lr, batch_size, num_workers=0,
                     seg_cap, seg_epochs, batch_size, num_workers,
                     lambda m: (training_logs.append(m), print(m, flush=True)))
                 if trained_seg is not None:
-                    torch.save(trained_seg.state_dict(), seg_model_path)
+                    save_checkpoint_atomic(trained_seg.state_dict(), seg_model_path)
                     best_metrics["segmentation"] = "gradcam_distilled"
                     best_metrics["seg_val_dice"] = seg_dice
                     best_metrics["seg_train_images"] = min(seg_cap, len(train_paths))
@@ -1413,25 +1451,32 @@ def predict_image(image, target_class_name):
 
 # Startup model load. Loading + warming up here (rather than on the first click)
 # is what removes the first-inference freeze described in the system plan.
-try:
-    seg_model, cls_model = load_models_from_disk()
-    # Only trust the on-disk seg model as a disease segmenter if the metrics file
-    # says it was Grad-CAM-distilled; otherwise it is the old anatomy-tracing one.
-    _startup_metrics = load_training_metrics()
-    seg_disease_model = bool(seg_model is not None and _startup_metrics
-                             and _startup_metrics.get("segmentation") == "gradcam_distilled")
-    if seg_model is None and cls_model is None:
-        print("No trained model found on disk. Train a model before inference.")
-    else:
-        loaded = [name for name, m in
-                  [("U-Net segmentation", seg_model), ("DenseNet-121 classifier", cls_model)]
-                  if m is not None]
-        seg_kind = " (disease-distilled)" if seg_disease_model else ""
-        print(f"Loaded and warmed up: {', '.join(loaded)}{seg_kind}.")
-except Exception as e:
+# Skipped when LUNGLENS_SKIP_STARTUP=1 (headless training): a DataLoader worker
+# re-imports this module on every Windows spawn, and warming up the models there
+# would burn a GPU forward pass per worker per epoch for no benefit.
+if os.environ.get("LUNGLENS_SKIP_STARTUP") == "1":
     seg_model = cls_model = None
     seg_disease_model = False
-    print(f"Warning: Could not load models at startup: {e}")
+else:
+    try:
+        seg_model, cls_model = load_models_from_disk()
+        # Only trust the on-disk seg model as a disease segmenter if the metrics
+        # file says it was Grad-CAM-distilled; else it is the old anatomy tracer.
+        _startup_metrics = load_training_metrics()
+        seg_disease_model = bool(seg_model is not None and _startup_metrics
+                                 and _startup_metrics.get("segmentation") == "gradcam_distilled")
+        if seg_model is None and cls_model is None:
+            print("No trained model found on disk. Train a model before inference.")
+        else:
+            loaded = [name for name, m in
+                      [("U-Net segmentation", seg_model), ("DenseNet-121 classifier", cls_model)]
+                      if m is not None]
+            seg_kind = " (disease-distilled)" if seg_disease_model else ""
+            print(f"Loaded and warmed up: {', '.join(loaded)}{seg_kind}.")
+    except Exception as e:
+        seg_model = cls_model = None
+        seg_disease_model = False
+        print(f"Warning: Could not load models at startup: {e}")
 
 
 # UI
