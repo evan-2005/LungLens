@@ -1,73 +1,87 @@
 {
-  "val_acc": 95.98,
-  "val_f1": 95.8,
-  "train_acc": 96.66,
-  "epoch": 9,
+  "val_acc": 96.34103019538188,
+  "val_f1": 95.70103168844881,
+  "train_acc": 97.45491896827208,
+  "epoch": 11,
   "epochs_requested": 40,
-  "early_stopped": true,
   "val_per_class_recall": {
-    "Normal": 98.88293118856122,
-    "Pneumonia": 94.28571428571428,
-    "Tuberculosis": 96.1038961038961,
-    "Covid-19": 93.33333333333333
+    "Normal": 98.4567901234568,
+    "Pneumonia": 93.49179400113186,
+    "Tuberculosis": 94.26523297491039,
+    "Covid-19": 95.50898203592814
   },
-  "train_samples": 22435,
-  "val_samples": 4773,
-  "test_samples": 4792,
+  "train_samples": 26286,
+  "val_samples": 5630,
+  "test_samples": 5637,
   "batch_size": 32,
   "lr": 0.0001,
-  "test_acc": 96.36894824707846,
-  "test_f1": 96.4626152457712,
+  "class_counts": {
+    "Normal": 13629,
+    "Pneumonia": 8046,
+    "Tuberculosis": 1332,
+    "Covid-19": 3279
+  },
+  "saved_at": "2026-07-22T20:37:57",
+  "early_stopped": true,
+  "test_acc": 96.18591449352493,
+  "test_f1": 95.82911916609483,
   "test_per_source_acc": {
     "tb_ds": {
-      "acc": 99.34102141680395,
-      "n": 607
+      "acc": 98.72,
+      "n": 625
     },
     "pneu_ds": {
-      "acc": 98.59813084112149,
-      "n": 856
+      "acc": 97.93926247288503,
+      "n": 922
     },
     "covid_ds": {
-      "acc": 100.0,
-      "n": 112
+      "acc": 98.1981981981982,
+      "n": 111
     },
     "radiography_db": {
-      "acc": 95.06769825918762,
-      "n": 3102
+      "acc": 94.61343472750316,
+      "n": 3156
     },
     "shenzhen_tb": {
-      "acc": 95.65217391304348,
-      "n": 115
+      "acc": 93.45794392523365,
+      "n": 107
+    },
+    "montgomery_tb": {
+      "acc": 95.0,
+      "n": 20
+    },
+    "tbx11k": {
+      "acc": 98.85057471264368,
+      "n": 696
     }
   },
   "confusion_matrix": [
     [
-      2213,
-      24,
-      1,
-      0
+      2879,
+      37,
+      9,
+      6
     ],
     [
-      90,
-      1683,
-      1,
-      11
-    ],
-    [
+      110,
+      1657,
       5,
-      1,
-      148,
-      0
+      10
     ],
     [
-      35,
-      6,
-      0,
-      574
+      11,
+      1,
+      264,
+      3
+    ],
+    [
+      15,
+      7,
+      1,
+      622
     ]
   ],
   "segmentation": "gradcam_distilled",
-  "seg_val_dice": 0.20247552395332669,
-  "seg_train_images": 3000,
-  "saved_at": "2026-07-22T13:08:01"
+  "seg_val_dice": 0.16152200311945195,
+  "seg_train_images": 3000
 }
