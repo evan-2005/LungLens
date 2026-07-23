@@ -1,4 +1,4 @@
-# LungLens — CSC 3014 Computer Vision (Part II)
+# LungLens - CSC 3014 Computer Vision (Part II)
 
 **LungLens** is a deployed, CPU-capable four-class chest X-ray (CXR) web application built for the CSC 3014 Computer Vision project (Part II).
 It classifies radiographs into **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**, explains each prediction with a **Grad-CAM heatmap**, generates a **disease-focused segmentation overlay** via a distilled U-Net, and accompanies every result with a **plain-language clinical summary**.
@@ -7,7 +7,7 @@ It classifies radiographs into **Normal**, **Pneumonia**, **Tuberculosis**, and 
 
 ---
 
-## Why LungLens? — Motivation
+## Why LungLens? - Motivation
 
 Respiratory disease is one of the largest preventable causes of death globally.
 Tuberculosis was linked to ~1.3 million deaths in 2022, pneumonia remains the leading infectious cause of death in children under five, and COVID-19 has been associated with more than 7 million reported deaths.
@@ -31,7 +31,7 @@ This release corrects and extends the Part I prototype with four concrete change
 
 ### The problem
 
-An early version learned a shortcut: because each disease originally came from a single dataset, the model could diagnose Covid-19 from the burned-in `PORTABLE SEMI-ERECT` watermark in RICORD scan corners rather than from the lungs. Grad-CAM overlays lit up image corners — empty of anatomy — for both COVID-19 and Normal predictions.
+An early version learned a shortcut: because each disease originally came from a single dataset, the model could diagnose Covid-19 from the burned-in `PORTABLE SEMI-ERECT` watermark in RICORD scan corners rather than from the lungs. Grad-CAM overlays lit up image corners - empty of anatomy - for both COVID-19 and Normal predictions.
 
 This is not a LungLens-specific failure. Zech et al. (PLOS Med. 2018) showed the same pattern across multiple pneumonia detectors: same-source accuracy overstates cross-source real-world performance. The per-source accuracy probe in the evaluation is reassuringly even, but it cannot fully settle the question because source and class remain partially confounded by construction.
 
@@ -87,7 +87,7 @@ Numbers from `chest_classifier_metrics.json` for the current checkpoint (`chest_
 
 ### Per-source accuracy (test)
 
-Roughly even accuracy across sources is the positive signal that pathology — not scanner metadata — is driving predictions.
+Roughly even accuracy across sources is the positive signal that pathology - not scanner metadata - is driving predictions.
 
 | Source | Accuracy | n |
 |---|---|---|
@@ -453,7 +453,7 @@ LungLens/
 - **Genuinely multi-source dataset per class** to break the remaining source–class confounding.
 - **Class-weighted loss + oversampling** to improve TB and Covid-19 minority representation further.
 - **Grad-CAM++** for sharper overlays (Chattopadhay et al., WACV 2018).
-- **Prospective radiologist validation** — the standard step before any clinical use.
+- **Prospective radiologist validation** - the standard step before any clinical use.
 
 ---
 
