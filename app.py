@@ -438,7 +438,18 @@ def get_dataset_paths():
     # Shenzhen TB set: a SECOND source for Tuberculosis (the one class the
     # radiography set lacks), so TB too is no longer tied to a single dataset.
     shenzhen = kagglehub.dataset_download("raddar/tuberculosis-chest-xrays-shenzhen")
-    return tb, pn, cov, radio, shenzhen
+    # Montgomery TB set: a THIRD TB source (58 TB + 80 Normal). Small, but TB is
+    # the scarcest class, so every extra source both adds volume and further
+    # decorrelates TB from any single scanner.
+    montgomery = kagglehub.dataset_download("raddar/tuberculosis-chest-xrays-montgomery")
+    # TBX11K (simplified): a large TB source, ~1,200 TB + healthy, labelled via a
+    # CSV. Its "sick_but_no_tb" class is dropped (it maps to none of our four).
+    tbx11k = kagglehub.dataset_download("vbookshelf/tbx11k-simplified")
+    # legrande TB: requested, but verified byte-identical to the tb_ds re-upload
+    # (plus duplicated "Copy" files). Kept here for completeness; the content-hash
+    # dedup in collect_dataset drops its duplicates so it cannot leak across splits.
+    legrande = kagglehub.dataset_download("legrande/tbdata")
+    return tb, pn, cov, radio, shenzhen, montgomery, tbx11k, legrande
 
 
 def _label_from_folder(rel_parts, folder_map):
@@ -502,7 +513,8 @@ def collect_dataset():
     every disease), so source no longer perfectly predicts the label the way it
     did when each class came from a single dataset.
     """
-    tb_base, pn_base, cov_base, radio_base, shenzhen_base = get_dataset_paths()
+    (tb_base, pn_base, cov_base, radio_base, shenzhen_base, montgomery_base,
+     tbx11k_base, legrande_base) = get_dataset_paths()
     paths, labels, groups, sources = [], [], [], []
 
     def add(f, label, source):
@@ -561,6 +573,47 @@ def collect_dataset():
             continue
         add(f, 2 if m.group(1) == "1" else 0, "shenzhen_tb")
 
+    # Montgomery TB set: same suffix scheme, MCUCXR_<id>_0/_1.
+    for f in glob.glob(os.path.join(montgomery_base, "**", "*.png"), recursive=True):
+        stem = os.path.splitext(os.path.basename(f))[0]
+        m = re.match(r"MCUCXR_\d+_([01])$", stem)
+        if not m:
+            continue
+        add(f, 2 if m.group(1) == "1" else 0, "montgomery_tb")
+
+    # TBX11K (simplified): labels come from data.csv (image_type). Only healthy
+    # -> Normal and tb -> Tuberculosis are used; "sick_but_no_tb" is skipped as it
+    # is abnormal but none of our four classes. The CSV has multiple rows per image
+    # (one per lesion box), so we dedup by fname first. The unlabelled test/ folder
+    # is ignored.
+    tbx_root = os.path.join(tbx11k_base, "tbx11k-simplified")
+    tbx_csv = os.path.join(tbx_root, "data.csv")
+    tbx_imgs = os.path.join(tbx_root, "images")
+    if os.path.exists(tbx_csv):
+        import csv as _csv
+        type_by_fname = {}
+        with open(tbx_csv, newline="") as fh:
+            for row in _csv.DictReader(fh):
+                type_by_fname[row["fname"]] = row["image_type"]
+        tbx_map = {"healthy": 0, "tb": 2}
+        for fname, itype in type_by_fname.items():
+            label = tbx_map.get(itype)
+            if label is None:
+                continue
+            fp = os.path.join(tbx_imgs, fname)
+            if os.path.exists(fp):
+                add(fp, label, "tbx11k")
+
+    # legrande TB: folder-labelled Normal / Tuberculosis. Skip the obvious "Copy"
+    # duplicates; the content-hash dedup below removes whatever else overlaps tb_ds.
+    for f in glob.glob(os.path.join(legrande_base, "**", "*.png"), recursive=True):
+        if "copy" in os.path.basename(f).lower():
+            continue
+        rel = os.path.relpath(f, legrande_base).split(os.sep)
+        label = _label_from_folder(rel, _TB_FOLDERS)
+        if label is not None:
+            add(f, label, "legrande_tb")
+
     custom_base = os.path.join(os.path.dirname(__file__), "custom_dataset")
     if os.path.exists(custom_base):
         for f in glob.glob(os.path.join(custom_base, "**", "*.*"), recursive=True):
@@ -573,7 +626,40 @@ def collect_dataset():
 
     if not paths:
         print("WARNING: No images found in datasets!")
+
+    paths, labels, groups, sources = _dedup_by_content(paths, labels, groups, sources)
     return paths, labels, groups, sources
+
+
+def _dedup_by_content(paths, labels, groups, sources):
+    """Drop byte-identical duplicate images, keeping the first occurrence.
+
+    Sources can overlap (e.g. legrande TB is a re-upload of tb_ds, and datasets
+    ship internal "Copy" duplicates). Identical images landing in different splits
+    would leak train into test and inflate accuracy, so we key on a cheap content
+    signature (file size + MD5 of the first 64 KB) and keep only the first copy.
+    """
+    import hashlib
+    seen = set()
+    kp, kl, kg, ks = [], [], [], []
+    dropped = 0
+    for p, l, g, s in zip(paths, labels, groups, sources):
+        try:
+            size = os.path.getsize(p)
+            with open(p, "rb") as fh:
+                head = fh.read(65536)
+            sig = (size, hashlib.md5(head).hexdigest())
+        except OSError:
+            sig = ("err", p)
+        if sig in seen:
+            dropped += 1
+            continue
+        seen.add(sig)
+        kp.append(p); kl.append(l); kg.append(g); ks.append(s)
+    if dropped:
+        print(f"Dedup: dropped {dropped} byte-identical duplicate images "
+              f"({len(kp)} unique remain).")
+    return kp, kl, kg, ks
 
 
 def collect_data():
@@ -711,14 +797,35 @@ def build_gradcam_targets(cls_net, paths, labels, eval_tf, cap, log):
     """
     Precompute Grad-CAM disease targets once (Normal -> all-zero mask), so the
     U-Net can then be trained over several epochs without paying the per-image
-    backward pass every time. Bounded by `cap` because Grad-CAM on CPU is slow.
-    The pool is shuffled before the cap is applied, otherwise the head would be
-    dominated by whichever dataset was concatenated first and the targets would
-    lack class variety.
+    backward pass every time. Bounded by `cap` because Grad-CAM is slow.
+
+    Selection is CLASS-BALANCED: an even quota per class rather than a uniform
+    sample. A uniform sample mirrors the data (TB ~3%, Covid ~14%), which starves
+    the rare disease channels and makes the U-Net collapse them to an empty mask;
+    balancing gives each disease channel enough positive targets to learn.
     """
-    order = list(range(len(paths)))
-    random.Random(42).shuffle(order)
-    order = order[:min(cap, len(paths))]
+    rng = random.Random(42)
+    by_label = {}
+    for i in range(len(paths)):
+        by_label.setdefault(labels[i], []).append(i)
+    for lab in by_label:
+        rng.shuffle(by_label[lab])
+
+    n = min(cap, len(paths))
+    labels_present = sorted(by_label)
+    quota = max(1, n // len(labels_present))
+    order = []
+    for lab in labels_present:
+        order.extend(by_label[lab][:quota])
+    # Fill any shortfall (a class had fewer than its quota) from the leftovers so
+    # we still reach the cap.
+    if len(order) < n:
+        chosen = set(order)
+        leftovers = [i for i in range(len(paths)) if i not in chosen]
+        rng.shuffle(leftovers)
+        order.extend(leftovers[:n - len(order)])
+    rng.shuffle(order)
+    order = order[:n]
     n = len(order)
     imgs = torch.zeros(n, 3, IMG_SIZE, IMG_SIZE)
     masks = torch.zeros(n, NUM_CLASSES, IMG_SIZE, IMG_SIZE)
@@ -1400,11 +1507,18 @@ def predict_image(image, target_class_name):
         # model: it reproduces the classifier's localisation in one forward pass
         # (no backward pass needed) and is the segmentation output the app is
         # meant to show. Fall back to live Grad-CAM, then to a stale U-Net mask.
+        # Prefer the distilled U-Net disease mask, but only when that channel
+        # actually has signal for this class. Rare classes (TB, Covid) can distil
+        # weakly, leaving a near-empty channel; using it would show no overlay at
+        # all, so we fall back to live Grad-CAM instead of an empty mask.
         if (seg_disease_model and pred_masks is not None and viz_idx > 0):
-            mask = pred_masks[0, viz_idx].cpu().numpy()
-            threshold = MASK_DISPLAY_THRESHOLD
-            mask_source = "segmentation"
-        elif cls_model is not None:
+            cand = pred_masks[0, viz_idx].cpu().numpy()
+            if float(cand.max()) >= MASK_DISPLAY_THRESHOLD:
+                mask = cand
+                threshold = MASK_DISPLAY_THRESHOLD
+                mask_source = "segmentation"
+
+        if mask is None and cls_model is not None:
             target_layer = get_gradcam_layer(cls_model)
             grad_cam     = GradCAM(cls_model, target_layer)
             grad_t       = tf(image).unsqueeze(0).to(device)
@@ -1412,7 +1526,7 @@ def predict_image(image, target_class_name):
             mask = grad_cam.generate_heatmap(grad_t, viz_idx)
             threshold = OVERLAY_THRESHOLD
             mask_source = "gradcam"
-        elif pred_masks is not None and viz_idx > 0:
+        elif mask is None and pred_masks is not None and viz_idx > 0:
             mask = pred_masks[0, viz_idx].cpu().numpy()
             mask_source = "segmentation"
 

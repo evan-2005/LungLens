@@ -2,29 +2,17 @@
   "changed": [
     {
       "path": "app.py",
-      "hash": "e1342bf2baa988ed42e5cb0cd23cac4ab671b3ce6e33200c147e3ed9a8a51cc3",
-      "size": 84044,
+      "hash": "9d94c568b8ec3dc089a6983ee41bbeb89721a100596fad06facb176ff883d5eb",
+      "size": 91061,
       "status": "modified"
-    },
-    {
-      "path": "chest_classifier_metrics.json",
-      "hash": "624f524ddaa4263a49517a1ff9b65c1dd3de0f607c325e2b48745007ad496274",
-      "size": 1250,
-      "status": "untracked"
-    },
-    {
-      "path": "train_run.py",
-      "hash": "4a762753b09df34f6039bdd27c5368bd7e9e8b5d689aaf89c2b0ea1a8bc840a2",
-      "size": 1916,
-      "status": "untracked"
     }
   ],
   "risk_files": [
     {
       "path": "app.py",
-      "importers": 3,
+      "importers": 4,
       "is_hub": true,
-      "reason": "hub file imported by 3 files"
+      "reason": "hub file imported by 4 files"
     }
   ],
   "recent_events": [],
@@ -33,6 +21,6 @@
     "Run tests covering changed files before handoff."
   ],
   "open_questions": [
-    "Live watch state was unavailable; timeline may be incomplete."
+    "No recent timeline events matched the lookback window."
   ]
 }
