@@ -1,17 +1,49 @@
-# LungLens
+# LungLens — CSC 3014 Computer Vision (Part II)
 
-LungLens is a local web application that classifies chest X-rays across four categories (Normal, Pneumonia, Tuberculosis, Covid-19) and shows a Grad-CAM attention heatmap explaining each prediction. It runs on CPU or, when available, an NVIDIA GPU (CUDA is auto-detected).
+**LungLens** is a deployed, CPU-capable four-class chest X-ray (CXR) web application built for the CSC 3014 Computer Vision project (Part II).
+It classifies radiographs into **Normal**, **Pneumonia**, **Tuberculosis**, and **Covid-19**, explains each prediction with a **Grad-CAM heatmap**, generates a **disease-focused segmentation overlay** via a distilled U-Net, and accompanies every result with a **plain-language clinical summary**.
 
-It runs a hybrid of two models. A **DenseNet-121** classifier makes the diagnostic call, and a **Multi-Task U-Net** provides a disease-segmentation overlay and a fallback path. Both can be **trained end to end from the app**: Stage 1 retrains the DenseNet that serves predictions, and Stage 2 (optional) distils that classifier's Grad-CAM into the U-Net so the overlay marks the region the classifier actually used. The interface is built with [Gradio](https://www.gradio.app/) using a restrained, professional clinical theme.
+> **Research and educational tool only. Not a certified medical device.** Always consult a qualified radiologist or physician for medical decisions. See the Disclaimer at the end. For a candid log of issues and lessons learned see [DEVELOPMENT_NOTES.md](DEVELOPMENT_NOTES.md).
 
-> Research and educational tool only. Not a certified medical device. See the Disclaimer at the end. For a candid log of the problems hit while building this and what is worth improving next, see [DEVELOPMENT_NOTES.md](DEVELOPMENT_NOTES.md).
+---
 
-## Guarding against dataset shortcuts
+## Why LungLens? — Motivation
 
-An early version learned a shortcut: because each disease originally came from a single dataset, the model could "diagnose" Covid-19 from the burned-in `PORTABLE SEMI-ERECT` text in the corner of the RICORD scans rather than from the lungs. Two changes counter this:
+Respiratory disease is one of the largest preventable causes of death globally.
+Tuberculosis was linked to ~1.3 million deaths in 2022, pneumonia remains the leading infectious cause of death in children under five, and COVID-19 has been associated with more than 7 million reported deaths.
+The diagnostic burden falls hardest on imaging departments in low- and middle-income settings where radiologist access is limited.
 
-- **Multiple sources per class.** Every class now draws from at least two independent datasets, so a scanner or source "fingerprint" no longer predicts the label. A per-source accuracy probe is printed at the end of every run so you can check whether the model scores evenly across sources (evidence it learned pathology) rather than leaning on one.
-- **Border crop.** A fixed 8% edge crop is applied identically at train and inference time, removing the corner annotations and laterality markers where these shortcuts live.
+A chest X-ray is cheap, fast, and widely available, but the radiographic findings for TB, pneumonia, and COVID-19 overlap heavily.
+LungLens acts as a triage layer: it flags urgent cases, visualises *where* the model looked, and delivers a confidence-aware summary that can connect imaging to treatment in clinics with no on-site radiologist.
+
+---
+
+## Contributions (Part II)
+
+This release corrects and extends the Part I prototype with four concrete changes:
+
+1. **The network we train is the network that serves predictions.** In Part I, the trained U-Net never reached inference; the DenseNet was used instead. Here, Stage 1 fine-tunes the DenseNet-121 that actually drives the Analysis tab.
+2. **Grad-CAM-distilled disease segmentation.** Stage 2 (optional) supervises the U-Net with the trained classifier's own Grad-CAM maps, so the overlay marks disease evidence rather than the anatomy-tracing brightness pseudo-masks used earlier.
+3. **Dataset-source bias is measured, not assumed away.** Because each disease originally came from a single dataset, a model can learn scanner fingerprints instead of pathology. We counter this with multi-source class construction, border cropping, and a per-source accuracy probe that makes any remaining shortcut visible.
+4. **An evaluation designed for class imbalance.** The headline metric is macro-F1 on a held-out test set (patient-grouped split). Per-class sensitivity/specificity, a confusion matrix, and a per-source accuracy breakdown are all reported.
+
+## Dataset-Source Bias
+
+### The problem
+
+An early version learned a shortcut: because each disease originally came from a single dataset, the model could diagnose Covid-19 from the burned-in `PORTABLE SEMI-ERECT` watermark in RICORD scan corners rather than from the lungs. Grad-CAM overlays lit up image corners — empty of anatomy — for both COVID-19 and Normal predictions.
+
+This is not a LungLens-specific failure. Zech et al. (PLOS Med. 2018) showed the same pattern across multiple pneumonia detectors: same-source accuracy overstates cross-source real-world performance. The per-source accuracy probe in the evaluation is reassuringly even, but it cannot fully settle the question because source and class remain partially confounded by construction.
+
+### Mitigations applied
+
+| Mitigation | Implementation |
+|---|---|
+| **Multi-source class construction** | Every class now spans at least two independent datasets; source fingerprints no longer predict the label |
+| **8% border crop** | Applied identically at train and inference time, removing corner annotations and laterality markers |
+| **Per-source accuracy probe** | Printed at the end of every training run; roughly even accuracy across sources indicates pathology was learned |
+
+> The reported 96% accuracy should be read as an optimistic upper bound, not a clean held-out clinical result.
 
 ---
 
@@ -27,6 +59,58 @@ An early version learned a shortcut: because each disease originally came from a
 - **Class-weighted, regularised training.** Inverse-frequency class weights counter dataset imbalance; geometric and photometric augmentation plus early stopping (on validation macro-F1) reduce overfitting.
 - **Runs on CPU or GPU.** CUDA is auto-detected. Both models load and run a warm-up pass at startup so the first inference is fast.
 - **In-browser or headless training.** Train from the Training tab (logs refresh live), or run `train_run.py` from the terminal for an unattended job that survives with no browser open.
+
+---
+
+## Results
+
+Evaluated on a composite of five public datasets (~32,300 images), patient-grouped train/val/test split (70/15/15%).  
+Numbers from `chest_classifier_metrics.json` for the current checkpoint (`chest_model_4class.pth`, saved 2026-07-22, early stopped at epoch 11/40).
+
+| Metric | Value |
+|---|---|
+| **Test accuracy** | **96.19%** |
+| **Test macro-F1** | **95.83%** |
+| Val accuracy | 96.34% |
+| Val macro-F1 | 95.70% |
+| Test samples | 5,637 |
+| Val samples | 5,630 |
+
+### Per-class recall (validation)
+
+| Class | Recall |
+|---|---|
+| Normal | 98.46% |
+| Pneumonia | 93.49% |
+| Tuberculosis | 94.27% |
+| Covid-19 | 95.51% |
+
+### Per-source accuracy (test)
+
+Roughly even accuracy across sources is the positive signal that pathology — not scanner metadata — is driving predictions.
+
+| Source | Accuracy | n |
+|---|---|---|
+| tb_ds (Tawsifurrahman TB) | 98.72% | 625 |
+| pneu_ds (Breviglieri Pneumonia) | 97.94% | 922 |
+| covid_ds (RICORD) | 98.20% | 111 |
+| radiography_db (COVID-19 Radiography) | 94.61% | 3,156 |
+| shenzhen_tb | 93.46% | 107 |
+| montgomery_tb | 95.00% | 20 |
+| tbx11k | 98.85% | 696 |
+
+### Confusion matrix (test set)
+
+|  | Pred Normal | Pred Pneumonia | Pred TB | Pred Covid-19 |
+|---|---|---|---|---|
+| **Normal** | 2,879 | 37 | 9 | 6 |
+| **Pneumonia** | 110 | 1,657 | 5 | 10 |
+| **Tuberculosis** | 11 | 1 | 264 | 3 |
+| **Covid-19** | 15 | 7 | 1 | 622 |
+
+Main confusion pairs: **Pneumonia ↔ Normal** (overlapping opacity patterns) and a small **Covid-19 → Normal** tail (PCR-positive RICORD scans with little visible abnormality).
+
+> **Honesty note.** The served checkpoint was trained before this evaluation; the original train/val split cannot be fully verified. The numbers are an optimistic upper bound rather than a clean prospective result.
 
 ---
 
@@ -354,6 +438,43 @@ LungLens/
 
 ---
 
+## Limitations
+
+1. **Unverified train/val split for the current checkpoint.** The figures should be read as an optimistic upper bound rather than a clean held-out clinical result.
+2. **Distilled segmentation inherits the classifier's mistakes.** The U-Net is a fast disease locator, not an independent ground-truth segmenter; that would require pixel-level masks the public datasets do not supply.
+3. **Label noise on the COVID boundary.** RICORD includes PCR-positive scans with little visible abnormality, adding noise that accounts for the 15 Covid-19 images predicted as Normal in the confusion matrix.
+4. **Source–class confounding.** Even after mitigations, source and class are partially tied by construction. Only a genuinely multi-source dataset for every class would remove the confound.
+
+---
+
+## Future Work
+
+- **Patient-grouped retraining from scratch** to give a verified held-out score.
+- **Genuinely multi-source dataset per class** to break the remaining source–class confounding.
+- **Class-weighted loss + oversampling** to improve TB and Covid-19 minority representation further.
+- **Grad-CAM++** for sharper overlays (Chattopadhay et al., WACV 2018).
+- **Prospective radiologist validation** — the standard step before any clinical use.
+
+---
+
+## Key References
+
+The following works directly inform the architecture, dataset choices, and evaluation design:
+
+- Rajpurkar et al., *CheXNet* (arXiv:1711.05225)
+- Huang et al., *Densely Connected CNNs / DenseNet* (CVPR 2017)
+- KC et al., *Evaluation of deep learning approaches for COVID-19 CXR* (SIVP 2021)
+- Selvaraju et al., *Grad-CAM* (ICCV 2017)
+- Ronneberger et al., *U-Net* (MICCAI 2015)
+- Gundel et al., *Multi-task learning for CXR abnormality classification* (arXiv:1905.06362)
+- Zech et al., *Variable generalisation of pneumonia detection* (PLOS Med. 2018)
+- Apostolopoulos & Mpesiana, *Covid-19 detection via transfer learning* (Phys. Eng. Sci. Med. 2020)
+- Minaee et al., *Deep-COVID* (Med. Image Anal. 2020)
+
+Full reference list is in the CSC 3014 Literature Review Part II document.
+
+---
+
 ## Disclaimer
 
-LungLens is a research and educational tool. It is not a certified medical device and must not be used as a substitute for professional clinical diagnosis. Always consult a qualified radiologist or physician for medical decisions.
+LungLens is a research and educational tool developed for CSC 3014 Computer Vision. It is not a certified medical device and must not be used as a substitute for professional clinical diagnosis. Always consult a qualified radiologist or physician for medical decisions.
