@@ -33,8 +33,14 @@ BORDER_CROP_FRAC = 0.08
 TEST_FRACTION   = 0.15
 VAL_FRACTION    = 0.15
 MODEL_PATH      = "chest_model_4class.pth"
+METRICS_PATH    = "chest_classifier_metrics.json"
 BATCH_SIZE      = 64
 SEED            = 42
+# MUST match the `num_samples` the checkpoint was trained with. app.py subsamples
+# the pool to this size BEFORE splitting, so evaluating on a split derived from the
+# full pool yields a different test set whose images were in that run's TRAINING
+# set. Override from argv[1] when a run used a different size.
+NUM_SAMPLES     = int(sys.argv[1]) if len(sys.argv) > 1 else 32000
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
@@ -95,12 +101,23 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 # Import only the data-gathering parts; avoid launching Gradio.
 # We'll replicate collect_dataset() manually using the same kagglehub paths.
+# Importing app otherwise loads BOTH checkpoints and runs a warm-up forward pass
+# through each, which this script does not need (it builds its own model below).
+os.environ.setdefault("LUNGLENS_SKIP_STARTUP", "1")
+
 try:
     import kagglehub
-    from app import collect_dataset, patient_grouped_split
+    from app import collect_dataset, stratified_subsample
     print("Importing collect_dataset from app.py...")
     paths, labels, groups, sources = collect_dataset()
-    print(f"  Total samples: {len(paths)}")
+    print(f"  Total samples in pool: {len(paths)}")
+    # Reproduce the training run's subsample BEFORE splitting. Skipping this was a
+    # real defect: the resulting "test" set overlapped the checkpoint's training
+    # data, so the verdict below could pass a checkpoint that had simply memorised
+    # the images it was being scored on.
+    paths, labels, groups, sources = stratified_subsample(
+        paths, labels, groups, sources, NUM_SAMPLES, seed=SEED)
+    print(f"  After stratified subsample to {NUM_SAMPLES}: {len(paths)}")
 except Exception as e:
     print(f"ERROR importing from app.py: {e}")
     sys.exit(1)
@@ -221,27 +238,53 @@ for src, info in sorted(src_groups.items()):
     src_acc = 100.0 * info["correct"] / info["total"]
     print(f"  {src:20s}: {src_acc:.2f}%  (n={info['total']})")
 
-# ── Compare to logged metrics (epoch-11 reference) ────────────────────────────
+# ── Compare to the recorded metrics for this checkpoint ───────────────────────
+# The reference is read from the metrics file rather than hardcoded. The previous
+# hardcoded literals (96.1859% / 95.8291%) went stale the moment a new run
+# finished, at which point the verdict compared the checkpoint against numbers
+# belonging to a different model.
 print("\n" + "="*60)
-print("REFERENCE (from train_full3 log / metrics JSON at epoch 11):")
-print("  Test Acc  = 96.1859%  |  Macro F1 = 95.8291%")
-print("  Normal=98.46%  Pneumonia=93.49%  TB=94.27%  Covid=95.51%")
+ref_acc = ref_f1 = None
+if os.path.exists(METRICS_PATH):
+    try:
+        with open(METRICS_PATH, encoding="utf-8") as fh:
+            ref = json.load(fh)
+        ref_acc = ref.get("test_acc")
+        ref_f1 = ref.get("test_f1")
+        print(f"REFERENCE ({METRICS_PATH}, recorded "
+              f"{ref.get('saved_at', 'unknown')}, epoch {ref.get('epoch', '?')}):")
+        if ref_acc is not None:
+            f1_txt = "not recorded" if ref_f1 is None else f"{ref_f1:.4f}%"
+            print(f"  Test Acc  = {ref_acc:.4f}%  |  Macro F1 = {f1_txt}")
+        print(f"  Recorded split sizes: train {ref.get('train_samples', '?')} / "
+              f"val {ref.get('val_samples', '?')} / test {ref.get('test_samples', '?')}")
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"REFERENCE unavailable (could not read {METRICS_PATH}: {e})")
+else:
+    print(f"REFERENCE unavailable ({METRICS_PATH} not found).")
 print("="*60)
 print("CURRENT CHECKPOINT:")
 print(f"  Test Acc  = {acc:.4f}%  |  Macro F1 = {macro_f1:.4f}%")
+print(f"  This run's test split: {len(test_ds)} images "
+      f"(subsampled pool = {NUM_SAMPLES})")
 
 # ── Verdict ───────────────────────────────────────────────────────────────────
 print()
-REF_ACC = 96.19
-if abs(acc - REF_ACC) < 0.5:
-    print("✅ VERDICT: Checkpoint matches epoch-11 reference within 0.5% — "
-          "chest_model_4class.pth is the GOOD model from train_full3.")
+if ref_acc is None:
+    print("VERDICT: no recorded reference to compare against. Absolute score "
+          f"is {acc:.2f}%; judge it against the per-class report above.")
+elif ref.get("test_samples") not in (None, len(test_ds)):
+    print(f"WARNING: this run scored {len(test_ds)} test images but the metrics "
+          f"file records {ref.get('test_samples')}. The splits differ, so the "
+          f"comparison below is not apples to apples. Re-run with the correct "
+          f"num_samples as argv[1].")
+elif abs(acc - ref_acc) < 0.5:
+    print(f"PASS: within 0.5% of the recorded {ref_acc:.2f}%. This is the "
+          f"checkpoint the metrics file describes.")
 elif acc < 70.0:
-    print("❌ VERDICT: Accuracy is severely degraded (<70%) — "
-          "checkpoint is likely corrupted or is a very early biased epoch.")
-elif acc < 90.0:
-    print("⚠️  VERDICT: Accuracy is below expectation — "
-          "may be an early epoch (e.g., epoch 1 from app.py run).")
+    print("FAIL: accuracy is severely degraded (<70%). The checkpoint is likely "
+          "corrupted or is a very early, biased epoch.")
 else:
-    print(f"⚠️  VERDICT: Accuracy {acc:.2f}% is plausible but doesn't closely "
-          f"match the logged 96.19% — investigate further.")
+    print(f"MISMATCH: {acc:.2f}% does not match the recorded {ref_acc:.2f}%. "
+          f"Either the checkpoint is not the one described by the metrics file, "
+          f"or the split differs. Investigate before citing either number.")

@@ -54,16 +54,16 @@ if device.type == "cpu":
 IMG_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-VAL_SPLIT = 0.2
 # Three-way patient-grouped split: hold out a test set that is used only for the
 # final report, so the number shown is not the same set the checkpoint was
 # selected on. Fractions are of the whole; the remainder is training data.
 TEST_FRACTION = 0.15
 VAL_FRACTION = 0.15
 EARLY_STOP_PATIENCE = 4         # epochs without a macro-F1 gain before stopping
-SEG_LOSS_WEIGHT = 2.0
+# Overlay thresholds are applied to the floored map from apply_heatmap_floor, not
+# to raw mask values, so the outline tracks what the heatmap actually shows.
 OVERLAY_THRESHOLD = 0.45        # Grad-CAM maps are relative, threshold after normalising
-MASK_DISPLAY_THRESHOLD = 0.5    # U-Net masks are probabilities, threshold the raw sigmoid
+MASK_DISPLAY_THRESHOLD = 0.5    # U-Net masks are probabilities, threshold the sigmoid
 CONFIDENCE_THRESHOLD = 0.60     # Below this top-class probability, report Uncertain
 OVERLAY_MIN_PROB = 0.15         # Do not draw an overlay for a class this improbable
 HEATMAP_FLOOR = 0.35            # Hide diffuse low activation so healthy areas stay clean
@@ -81,6 +81,11 @@ BORDER_CROP_FRAC = 0.08
 # larger batch would overflow VRAM and spill to shared system memory, which stalls
 # training. See train_segmentation_head.
 SEG_MAX_BATCH = 8
+# Stage-2 learning rate. 1e-3 overshot: val Dice oscillated between roughly 0.07
+# and 0.15 across ten epochs with no convergence trend, which is the signature of
+# too large a step rather than of a model that cannot fit. Paired with a
+# plateau scheduler below, mirroring what Stage 1 already does.
+SEG_LR = 3e-4
 OVERLAY_COLOR = (0, 113, 227)  # RGB clinical blue used for the segmentation overlay
 AUTO_OVERLAY = "Auto (predicted class)"
 
@@ -118,14 +123,18 @@ class BorderCrop:
 
 def generate_pseudo_mask(gray_resized):
     """
-    Build an anatomically informed pseudo-mask for the abnormal lung regions.
+    LEGACY. Superseded by Grad-CAM distillation and NOT used by the pipeline.
 
-    Real per-pixel lung annotations are not available for these datasets, so the
-    multi-task U-Net is supervised with a deterministic target derived from the
-    image itself: contrast-equalise, isolate denser (brighter) tissue with an
-    Otsu threshold, restrict it to an elliptical lung field, then clean the
-    result with morphology. This is far closer to true opacity than the previous
-    fixed-rectangle threshold and gives the segmentation head a learnable signal.
+    This builds a brightness pseudo-mask: contrast-equalise, isolate denser
+    (brighter) tissue with an Otsu threshold, restrict to an elliptical lung
+    field, clean with morphology. It was the original Stage-2 supervision target,
+    and it was replaced because the Otsu threshold selects the brightest anatomy
+    (spine, ribs, mediastinum) rather than pathology, making the target nearly
+    identical for a diseased and a healthy lung. Stage 2 now trains against
+    build_gradcam_targets instead.
+
+    Retained only because debug_training.py exercises it through
+    SegmentationDataset. Nothing in the served app calls either one.
     Input and output are both float/uint8 arrays of shape (IMG_SIZE, IMG_SIZE).
     """
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -174,9 +183,13 @@ class ChestXRayDataset(Dataset):
 
 class SegmentationDataset(Dataset):
     """
-    Generates pseudo-masks lazily inside __getitem__ so the DataLoader
-    can parallelise the work instead of blocking the main thread.
-    Uses a fast threshold fallback, Grad-CAM per-image is too slow on CPU.
+    LEGACY. Feeds the brightness pseudo-mask of generate_pseudo_mask and is NOT
+    used by the pipeline; Stage 2 trains on precomputed Grad-CAM targets held in
+    a TensorDataset (see train_segmentation_head). Kept only for
+    debug_training.py.
+
+    Generates pseudo-masks lazily inside __getitem__ so the DataLoader can
+    parallelise the work instead of blocking the main thread.
     """
     def __init__(self, image_paths, labels, transform=None):
         self.image_paths = image_paths
@@ -290,29 +303,40 @@ class DiceBCELoss(nn.Module):
 
 def dice_coefficient(y_pred, y_true, smooth=1e-6, threshold=0.5):
     """
-    Mean Dice over only the (sample, channel) pairs that actually contain a
-    region in either the prediction or the target. Averaging over *all* channels
-    (the old behaviour) handed a free 1.0 to every empty channel, so a model
-    predicting nothing still scored ~0.75 on a single-region-per-image target.
-    Restricting to present channels makes the score reflect real overlap.
+    Mean Dice over the (sample, channel) pairs whose TARGET contains a region,
+    i.e. "when there is a lesion to find, how well is it localised".
 
-    Both sides are binarised at the same threshold. y_true is a soft Grad-CAM
-    heatmap (continuous 0-1, broad low-value spread from being upsampled off a
-    7x7 feature map), not a hard mask. Comparing a binary y_pred against a
-    left-continuous y_true put the target's full soft mass in the union
-    denominator while the prediction only contributed pixels above threshold,
-    which structurally deflated the score regardless of prediction quality.
+    Two structural biases had to be removed to make this number mean anything:
+
+    1. Both sides are binarised at the same threshold. y_true is a soft Grad-CAM
+       heatmap (continuous 0-1, with a broad low-value skirt from being upsampled
+       off a 7x7 feature map), not a hard mask. Scoring a binarised y_pred against
+       a still-continuous y_true put the target's full soft mass in the union
+       denominator while the prediction only contributed pixels above threshold.
+       Measured: a near-perfect prediction scored 0.557 that way, 0.930 once both
+       sides are binarised.
+
+    2. Selection is on the target, not on "either side". Normal images carry an
+       all-zero target in every channel, so under an either-side rule they were
+       only counted when the U-Net emitted a false positive, and then they scored
+       ~0. With the class-balanced quota in build_gradcam_targets making ~25% of
+       Stage-2 samples Normal, that capped a *perfectly* localising model at 0.75.
+
+    Because Normal samples are excluded, this score does not penalise false
+    positives on healthy lungs; read it alongside the classifier's metrics, not
+    as a standalone quality figure. Returns 1.0 when no target region exists
+    anywhere in the batch (nothing was asked for).
     """
     y_bin  = (y_pred > threshold).float()
     t_bin  = (y_true > threshold).float()
     inter  = (y_bin * t_bin).sum(dim=(2, 3))
     union  = y_bin.sum(dim=(2, 3)) + t_bin.sum(dim=(2, 3))
     dice   = (2.0 * inter + smooth) / (union + smooth)
-    present = union > 0
+    present = t_bin.sum(dim=(2, 3)) > 0
     if present.any():
         result = dice[present].mean().item()
     else:
-        # No region anywhere in pred or target: a correct empty prediction.
+        # Nothing was asked for anywhere in this batch.
         result = 1.0
     if np.isnan(result) or np.isinf(result):
         return 0.0
@@ -373,7 +397,11 @@ def load_training_metrics():
     except (OSError, json.JSONDecodeError) as e:
         print(f"Warning: could not read {metrics_path}: {e}")
         return None
-    if not isinstance(metrics, dict) or "val_acc" not in metrics:
+    # Accept either scope: seg_recover.py re-scores a checkpoint on the test split
+    # without retraining, so it legitimately has no val_acc to report.
+    if not isinstance(metrics, dict):
+        return None
+    if "val_acc" not in metrics and "test_acc" not in metrics:
         return None
     if (os.path.exists(model_path)
             and os.path.getmtime(model_path) > os.path.getmtime(metrics_path) + 1):
@@ -701,8 +729,17 @@ def stratified_subsample(paths, labels, groups, sources, num_samples, seed=42):
 
 
 def _group_split(indices, labels, groups, test_size, seed):
-    """Split an index array by group so no group spans both sides. Falls back to
-    a plain stratified split if there is only one group per side is impossible."""
+    """Split an index array by group so no group spans both sides.
+
+    NOT stratified. GroupShuffleSplit accepts a `y` argument and ignores it, so
+    class proportions drift between the two sides rather than being held. Measured
+    on a 50/30/5/15 distribution with three images per group, a 15% split came out
+    at 53.7/26.1/6.0/14.1. The drift is tolerable at this scale but it is real, so
+    do not describe the resulting partitions as class-stratified: only
+    stratified_subsample above actually stratifies. Switching to
+    StratifiedGroupKFold would fix it, at the cost of changing every existing
+    split and invalidating checkpoints selected under the current one.
+    """
     gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
     sub_labels = [labels[i] for i in indices]
     sub_groups = [groups[i] for i in indices]
@@ -888,13 +925,22 @@ def train_segmentation_head(cls_net, train_paths, train_labels, eval_tf,
     # returning) and clear the cache so the U-Net has the VRAM to itself; otherwise
     # both models resident at once overflow a 6 GB card and training stalls.
     cls_home = next(cls_net.parameters()).device
+    # Grad-CAM needed a backward pass per target image, which leaves a .grad
+    # buffer on every classifier parameter. This same object is published for
+    # inference afterwards, so drop the buffers rather than carrying a second
+    # full copy of the weights around for the life of the process.
+    cls_net.zero_grad(set_to_none=True)
     cls_net.to("cpu")
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
     seg_net = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES).to(device)
     seg_crit = DiceBCELoss()
-    opt = optim.Adam(seg_net.parameters(), lr=1e-3)
+    opt = optim.Adam(seg_net.parameters(), lr=SEG_LR)
+    # Halve the step whenever val Dice stops improving, so a run that starts to
+    # oscillate settles instead of bouncing for the rest of its epochs.
+    seg_sched = optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode="max", factor=0.5, patience=1)
     best_dice = 0.0
     best_state = None
 
@@ -920,7 +966,9 @@ def train_segmentation_head(cls_net, train_paths, train_labels, eval_tf,
                 dsum += dice_coefficient(pred, yb)
                 k += 1
         val_dice = dsum / max(1, k)
-        log(f"  Seg epoch {ep+1}/{seg_epochs} | Val Dice: {val_dice:.4f}")
+        seg_sched.step(val_dice)
+        log(f"  Seg epoch {ep+1}/{seg_epochs} | Val Dice: {val_dice:.4f} | "
+            f"LR: {opt.param_groups[0]['lr']:.2e}")
         if val_dice > best_dice:
             best_dice = val_dice
             best_state = {kk: v.detach().cpu().clone() for kk, v in seg_net.state_dict().items()}
@@ -1113,9 +1161,15 @@ def run_training_thread(num_samples, epochs, lr, batch_size, num_workers=0,
 
         # Reload the best checkpoint and report on the held-out TEST set, which
         # was never used for selection, so the headline number is honest.
-        if os.path.exists(model_path):
+        # have_checkpoint gates publication further down: without it, a run where
+        # no epoch ever beat the initial macro-F1 (or where every batch errored)
+        # would fall through to `net` and publish an untrained network over
+        # whatever was being served before.
+        have_checkpoint = os.path.exists(model_path)
+        if have_checkpoint:
             eval_net = CNNModel(classCount=NUM_CLASSES, isTrained=False)
-            eval_net.load_state_dict(torch.load(model_path, map_location=device))
+            eval_net.load_state_dict(
+                torch.load(model_path, map_location=device, weights_only=True))
             eval_net.to(device)
         else:
             eval_net = net
@@ -1205,17 +1259,22 @@ def run_training_thread(num_samples, epochs, lr, batch_size, num_workers=0,
         # Publish the reloaded best classifier (and the new segmentation U-Net,
         # if trained) for inference only after the run ends, under the lock, so
         # requests never see a half-trained model.
-        eval_net.eval()
-        warm_up_model(eval_net)
-        if trained_seg is not None:
-            trained_seg.eval()
-            warm_up_model(trained_seg)
-        with model_lock:
-            cls_model = eval_net
+        if have_checkpoint:
+            eval_net.eval()
+            warm_up_model(eval_net)
             if trained_seg is not None:
-                seg_model = trained_seg
-                # From now on inference may prefer the U-Net disease mask.
-                seg_disease_model = True
+                trained_seg.eval()
+                warm_up_model(trained_seg)
+            with model_lock:
+                cls_model = eval_net
+                if trained_seg is not None:
+                    seg_model = trained_seg
+                    # From now on inference may prefer the U-Net disease mask.
+                    seg_disease_model = True
+        else:
+            training_logs.append(
+                "No checkpoint was written (no epoch improved on the initial "
+                "score), so the previously served model is left in place.")
 
         training_status = "Training Finished"
         training_logs.append("Done.")
@@ -1323,7 +1382,10 @@ def load_models_from_disk():
     if os.path.exists(seg_model_path):
         try:
             seg = MultiTaskUNet(in_channels=3, num_classes=NUM_CLASSES)
-            seg.load_state_dict(torch.load(seg_model_path, map_location=device))
+            # weights_only=True: these checkpoints are plain state_dicts, so the
+            # unpickler never needs to execute arbitrary code from the file.
+            seg.load_state_dict(
+                torch.load(seg_model_path, map_location=device, weights_only=True))
             seg.to(device)
             seg.eval()
             warm_up_model(seg)
@@ -1333,7 +1395,8 @@ def load_models_from_disk():
     if os.path.exists(model_path):
         try:
             cls = CNNModel(classCount=NUM_CLASSES, isTrained=False)
-            cls.load_state_dict(torch.load(model_path, map_location=device))
+            cls.load_state_dict(
+                torch.load(model_path, map_location=device, weights_only=True))
             cls.to(device)
             cls.eval()
             warm_up_model(cls)
@@ -1343,23 +1406,38 @@ def load_models_from_disk():
     return seg, cls
 
 
+def apply_heatmap_floor(mask):
+    """
+    Suppress diffuse low activation: zero everything below HEATMAP_FLOOR and
+    rescale [floor, 1] to [0, 1], so only genuine attention gets coloured and
+    healthy tissue keeps the original grayscale instead of a full-image wash.
+
+    Factored out so the displayed heatmap and the outlined region are derived
+    from the SAME map. They used to disagree: the display floored and rescaled
+    while clean_region thresholded the raw mask, so an outline drawn at raw 0.45
+    landed where display intensity was only (0.45-0.35)/0.65 = 0.15, i.e. an
+    outline floating in apparently blank tissue. Thresholds are now interpreted
+    in this floored space by both.
+    """
+    m = np.clip(mask, 0.0, 1.0).astype(np.float32)
+    # Guard the rescale: a floor of 1.0 would otherwise divide by zero.
+    denom = max(1e-6, 1.0 - HEATMAP_FLOOR)
+    return np.where(m < HEATMAP_FLOOR, 0.0, (m - HEATMAP_FLOOR) / denom)
+
+
 def build_heatmap(orig_np, mask, alpha=0.5):
     """
     Blend a translucent Grad-CAM heatmap over the full-resolution image.
 
-    The mask (float in [0, 1]) is used both to colourise (JET) and as a
-    per-pixel alpha, so only activated regions get colour and flat areas keep
-    the original X-ray. This is a soft attention map, not a hard "finding"
-    marker, so it never reads as a false lesion the way a filled block did.
+    Expects a mask already passed through apply_heatmap_floor. The mask (float
+    in [0, 1]) is used both to colourise (JET) and as a per-pixel alpha, so only
+    activated regions get colour and flat areas keep the original X-ray. This is
+    a soft attention map, not a hard "finding" marker, so it never reads as a
+    false lesion the way a filled block did.
     """
     orig_h, orig_w = orig_np.shape[:2]
     m = np.clip(mask, 0.0, 1.0).astype(np.float32)
     m = cv2.resize(m, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-
-    # Suppress diffuse low activation: rescale [floor, 1] to [0, 1] and zero the
-    # rest, so only genuine attention gets coloured and healthy tissue keeps the
-    # original grayscale instead of a full-image colour wash.
-    m = np.where(m < HEATMAP_FLOOR, 0.0, (m - HEATMAP_FLOOR) / (1.0 - HEATMAP_FLOOR))
 
     heat = cv2.applyColorMap((m * 255).astype(np.uint8), cv2.COLORMAP_JET)
     heat = cv2.cvtColor(heat, cv2.COLOR_BGR2RGB).astype(np.float32)
@@ -1371,10 +1449,14 @@ def build_heatmap(orig_np, mask, alpha=0.5):
 
 def clean_region(mask, threshold, out_shape):
     """
-    Threshold the mask on its RAW values (no min-max stretching, which forces a
-    region even where the class is absent), remove speckle below
-    MIN_REGION_AREA_FRAC, and resize to the original resolution. Returns a
-    full-size binary region, or None if nothing survives.
+    Threshold the mask absolutely (no min-max stretching, which forces a region
+    even where the class is absent), remove speckle below MIN_REGION_AREA_FRAC,
+    and resize to the original resolution. Returns a full-size binary region, or
+    None if nothing survives.
+
+    Callers pass the floored map from apply_heatmap_floor, so the outline marks
+    the visibly hot core of the heatmap rather than a level the display has
+    already suppressed.
     """
     binary = (mask > threshold).astype(np.uint8)
     if not binary.any():
@@ -1541,9 +1623,12 @@ def predict_image(image, target_class_name):
         superimposed = orig_np
         has_region = False
         if mask is not None:
-            superimposed = build_heatmap(orig_np, mask)
+            # One floored map feeds both the blend and the outline, so the two
+            # can no longer disagree about where the region is.
+            display_mask = apply_heatmap_floor(mask)
+            superimposed = build_heatmap(orig_np, display_mask)
             if is_confident_finding:
-                region = clean_region(mask, threshold, orig_np.shape)
+                region = clean_region(display_mask, threshold, orig_np.shape)
                 if region is not None:
                     superimposed = outline_region(superimposed, region)
                     has_region = True
@@ -1808,13 +1893,22 @@ def build_metrics_html():
         acc = metrics.get("test_acc", metrics.get("val_acc"))
         f1 = metrics.get("test_f1", metrics.get("val_f1"))
         scope = "held-out test" if "test_acc" in metrics else "validation"
-        recalls = metrics.get("val_per_class_recall", {})
+        # Label the recall row with the split it was actually measured on. These
+        # were previously always rendered as "(val)", which mislabelled the
+        # test-split recalls that seg_recover.py writes.
+        if "test_per_class_recall" in metrics:
+            recalls, recall_scope = metrics["test_per_class_recall"], "test"
+        else:
+            recalls, recall_scope = metrics.get("val_per_class_recall", {}), "val"
         recall_str = ", ".join(f"{k} {v:.0f}%" for k, v in recalls.items()) if recalls else ""
         src = metrics.get("test_per_source_acc", {})
         src_str = ", ".join(f"{s} {v['acc']:.0f}%" for s, v in src.items()) if src else ""
 
+        # acc can be absent if a metrics file records only segmentation results.
+        acc_cell = (f"<span class='ll-metric-v'>{acc:.1f}%</span>" if acc is not None
+                    else "<span class='ll-metric-v ll-metric-na'>Not recorded</span>")
         rows = (
-            f"<div class='ll-metric'><span class='ll-metric-v'>{acc:.1f}%</span>"
+            f"<div class='ll-metric'>{acc_cell}"
             f"<span class='ll-metric-k'>Accuracy ({scope})</span></div>"
         )
         if f1 is not None:
@@ -1832,7 +1926,8 @@ def build_metrics_html():
             f"Recorded {metrics.get('saved_at', 'unknown')}.</p>"
         )
         if recall_str:
-            note += f"<p class='ll-metrics-note'>Per-class recall (val): {recall_str}.</p>"
+            note += (f"<p class='ll-metrics-note'>Per-class recall ({recall_scope}): "
+                     f"{recall_str}.</p>")
         if src_str:
             note += (
                 f"<p class='ll-metrics-note'>Accuracy by source dataset: {src_str}. "
