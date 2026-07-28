@@ -145,3 +145,4 @@ dmypy.json
 # Training artifacts (generated each run)
 runs/
 training_curves.png
+.codemap/
