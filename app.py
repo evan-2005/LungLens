@@ -288,17 +288,25 @@ class DiceBCELoss(nn.Module):
         return bce + dice
 
 
-def dice_coefficient(y_pred, y_true, smooth=1e-6):
+def dice_coefficient(y_pred, y_true, smooth=1e-6, threshold=0.5):
     """
     Mean Dice over only the (sample, channel) pairs that actually contain a
     region in either the prediction or the target. Averaging over *all* channels
     (the old behaviour) handed a free 1.0 to every empty channel, so a model
     predicting nothing still scored ~0.75 on a single-region-per-image target.
     Restricting to present channels makes the score reflect real overlap.
+
+    Both sides are binarised at the same threshold. y_true is a soft Grad-CAM
+    heatmap (continuous 0-1, broad low-value spread from being upsampled off a
+    7x7 feature map), not a hard mask. Comparing a binary y_pred against a
+    left-continuous y_true put the target's full soft mass in the union
+    denominator while the prediction only contributed pixels above threshold,
+    which structurally deflated the score regardless of prediction quality.
     """
-    y_bin  = (y_pred > 0.5).float()
-    inter  = (y_bin * y_true).sum(dim=(2, 3))
-    union  = y_bin.sum(dim=(2, 3)) + y_true.sum(dim=(2, 3))
+    y_bin  = (y_pred > threshold).float()
+    t_bin  = (y_true > threshold).float()
+    inter  = (y_bin * t_bin).sum(dim=(2, 3))
+    union  = y_bin.sum(dim=(2, 3)) + t_bin.sum(dim=(2, 3))
     dice   = (2.0 * inter + smooth) / (union + smooth)
     present = union > 0
     if present.any():
