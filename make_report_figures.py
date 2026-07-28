@@ -114,8 +114,14 @@ fig.savefig(os.path.join(OUT, "fig4_per_source.png"), bbox_inches="tight")
 plt.close(fig)
 
 # ── Fig 6: training curves from the real log ─────────────────────────────────
-log = os.path.join(HERE, "train_full3.log")
+# Pick the most recent train*.log rather than a fixed name, so the curves always
+# describe the same run as the metrics file instead of silently plotting an older
+# one after a retrain.
+import glob as _glob
+_logs = sorted(_glob.glob(os.path.join(HERE, "train*.log")), key=os.path.getmtime)
+log = _logs[-1] if _logs else os.path.join(HERE, "train_full3.log")
 if os.path.exists(log):
+    print(f"training curves from: {os.path.basename(log)}")
     ep, tr, va, vf = [], [], [], []
     pat = re.compile(r"^Epoch (\d+)/\d+ \| Train Acc: ([\d.]+)% \| Val Acc: "
                      r"([\d.]+)% \| Val macro-F1: ([\d.]+)%")
@@ -165,7 +171,7 @@ def arrow(ax, x1, y1, x2, y2, c="#4a5a68", label=None, fs=8.5):
 fig, ax = plt.subplots(figsize=(13.2, 7.4), dpi=200)
 ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
 
-ax.text(0.02, 0.965, "Stage 1 — Train the served classifier", fontsize=14,
+ax.text(0.02, 0.965, "Stage 1: Train the served classifier", fontsize=14,
         fontweight="bold", color=BLUE_D)
 w, h, y = 0.168, 0.135, 0.775
 xs = [0.02, 0.216, 0.412, 0.608, 0.804]
@@ -178,7 +184,7 @@ for i in range(4):
     arrow(ax, xs[i] + w + 0.004, y + h/2, xs[i+1] - 0.004, y + h/2)
 arrow(ax, xs[3] + w/2, y - 0.006, xs[3] + w/2, 0.585, BRN_D, "trained\nweights")
 
-ax.text(0.02, 0.545, "Stage 2 — Distil Grad-CAM into a disease-segmentation head",
+ax.text(0.02, 0.545, "Stage 2: Distil Grad-CAM into a disease-segmentation head",
         fontsize=14, fontweight="bold", color=BRN_D)
 y2, w2 = 0.335, 0.215
 x2 = [0.135, 0.395, 0.655]

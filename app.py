@@ -1924,7 +1924,7 @@ def build_metrics_html():
         if f1 is not None:
             rows += (
                 f"<div class='ll-metric'><span class='ll-metric-v'>{f1:.1f}%</span>"
-                f"<span class='ll-metric-k'>Macro-F1 &mdash; the number to watch under class imbalance</span></div>"
+                f"<span class='ll-metric-k'>Macro-F1, the number to watch under class imbalance</span></div>"
             )
         note = (
             f"<p class='ll-metrics-note'>DenseNet-121, best of "
@@ -1959,7 +1959,7 @@ def build_metrics_html():
 
     return f"""
 <div class="ll-metrics">
-  <div class="ll-metrics-head">Current model &mdash; the served classifier</div>
+  <div class="ll-metrics-head">Current model: the served classifier</div>
   {body}
   <div class="ll-metrics-head ll-metrics-head-2">Recommended run</div>
   <p class="ll-metrics-note">

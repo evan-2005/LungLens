@@ -64,40 +64,60 @@ This is not a LungLens-specific failure. Zech et al. (PLOS Med. 2018) showed the
 
 ## Results
 
-Evaluated on a composite of five public datasets (~32,300 images), patient-grouped train/val/test split (70/15/15%).  
-Numbers from `chest_classifier_metrics.json` for the current checkpoint (`chest_model_4class.pth`, saved 2026-07-22, early stopped at epoch 11/40).
+Eight public datasets, deduplicated to 37,553 images, sampled to 32,000 and divided by patient
+into train, validation and test partitions (70/15/15%). Numbers come from
+`chest_classifier_metrics.json` for the served checkpoint (`chest_model_4class.pth`, saved
+2026-07-28, early stopped at epoch 18 of 40).
 
 | Metric | Value |
 |---|---|
-| **Test accuracy** | **96.19%** |
-| **Test macro-F1** | **95.83%** |
-| Val accuracy | 96.34% |
-| Val macro-F1 | 95.70% |
-| Test samples | 5,637 |
-| Val samples | 5,630 |
+| **Test accuracy** | **96.18%** |
+| **Test macro-F1** | **95.77%** |
+| Val accuracy | 96.27% |
+| Val macro-F1 | 96.02% |
+| Test samples | 4,759 |
+| Val samples | 4,822 |
+| Segmentation Dice | 0.4806 |
 
-### Per-class recall (validation)
+The split is reproducible. Every directory listing is sorted before use, so the partition depends
+only on the dataset contents and the random seed, not on the order the filesystem happens to
+return files in. `eval_classifier_perclass.py` rebuilds it from scratch and returns 96.1757%
+accuracy against the 96.18% recorded here, on the same 4,759 images.
 
-| Class | Recall |
-|---|---|
-| Normal | 98.46% |
-| Pneumonia | 93.49% |
-| Tuberculosis | 94.27% |
-| Covid-19 | 95.51% |
+### Per-class performance (held-out test)
+
+| Class | Precision | Recall | F1 | Specificity | n |
+|---|---|---|---|---|---|
+| Normal | 0.953 | 0.985 | 0.969 | 0.946 | 2,502 |
+| Pneumonia | 0.983 | 0.922 | 0.951 | 0.993 | 1,478 |
+| Tuberculosis | 0.947 | 0.951 | 0.949 | 0.997 | 243 |
+| Covid-19 | 0.957 | 0.966 | 0.962 | 0.995 | 536 |
+| **Macro avg.** | **0.960** | **0.956** | **0.958** | **0.983** | **4,759** |
+
+Of 182 errors, 102 are pneumonia predicted as Normal. That single cell is 56% of all mistakes and
+is what holds pneumonia recall down to 0.922. It is also the error direction that matters most in
+a triage setting, since it means a missed treatable infection. No other off-diagonal cell exceeds
+14 images.
 
 ### Per-source accuracy (test)
 
-Roughly even accuracy across sources is the positive signal that pathology - not scanner metadata - is driving predictions.
+Accuracy is broken down by originating dataset as a confounding probe. A wide spread suggests the
+model is partly keying on the scanner rather than the pathology.
 
 | Source | Accuracy | n |
 |---|---|---|
-| tb_ds (Tawsifurrahman TB) | 98.72% | 625 |
-| pneu_ds (Breviglieri Pneumonia) | 97.94% | 922 |
-| covid_ds (RICORD) | 98.20% | 111 |
-| radiography_db (COVID-19 Radiography) | 94.61% | 3,156 |
-| shenzhen_tb | 93.46% | 107 |
-| montgomery_tb | 95.00% | 20 |
-| tbx11k | 98.85% | 696 |
+| tbx11k | 99.50% | 597 |
+| tb_ds (Tawsifurrahman TB) | 98.50% | 535 |
+| pneu_ds (Breviglieri Pneumonia) | 98.31% | 709 |
+| covid_ds (RICORD) | 96.70% | 91 |
+| radiography_db (COVID-19 Radiography) | 94.60% | 2,723 |
+| shenzhen_tb | 91.30% | 92 |
+| montgomery_tb | 83.33% | 12 |
+
+The range runs from 0.833 to 0.995. Part of that is small-sample noise, since Montgomery
+contributes 12 test images and Shenzhen 92, but the spread is wider than pathology alone would
+explain. Source and class stay partially correlated even in the eight-source composite, so this
+check narrows the confound without settling it.
 
 ### Confusion matrix (test set)
 
@@ -191,7 +211,9 @@ otherwise.
 
 Datasets are downloaded automatically via [KaggleHub](https://github.com/Kaggle/kagglehub) on first training. No manual download is required. Labels are inferred from file and folder names (and, for the Shenzhen set, the filename suffix), so no CSV is needed.
 
-Five sources are merged, chosen so **every class comes from at least two independent datasets**. This is the core of the confound mitigation described above. About **32,900 images** in total.
+Eight sources are merged, chosen so **every class comes from at least two independent datasets**.
+This is the core of the confound mitigation described above. Walking all eight and dropping
+byte-identical duplicates leaves **37,553 images**.
 
 | # | Dataset | Kaggle Source | Labels Used |
 |---|---------|---------------|-------------|
@@ -200,8 +222,17 @@ Five sources are merged, chosen so **every class comes from at least two indepen
 | 3 | COVID-19 Chest X-ray Positive Tests (RICORD) | [raddar/ricord-covid19-xray-positive-tests](https://www.kaggle.com/datasets/raddar/ricord-covid19-xray-positive-tests) | `covid-19` |
 | 4 | COVID-19 Radiography Database | [tawsifurrahman/covid19-radiography-database](https://www.kaggle.com/datasets/tawsifurrahman/covid19-radiography-database) | `normal`, `pneumonia` (Lung Opacity + Viral Pneumonia), `covid-19` |
 | 5 | Shenzhen Tuberculosis Chest X-rays | [raddar/tuberculosis-chest-xrays-shenzhen](https://www.kaggle.com/datasets/raddar/tuberculosis-chest-xrays-shenzhen) | `normal`, `tuberculosis` |
+| 6 | Montgomery Tuberculosis Chest X-rays | [raddar/tuberculosis-chest-xrays-montgomery](https://www.kaggle.com/datasets/raddar/tuberculosis-chest-xrays-montgomery) | `normal`, `tuberculosis` |
+| 7 | TBX11K (simplified) | [vbookshelf/tbx11k-simplified](https://www.kaggle.com/datasets/vbookshelf/tbx11k-simplified) | `healthy`, `tb` (via `data.csv`) |
+| 8 | TB Data | [legrande/tbdata](https://www.kaggle.com/datasets/legrande/tbdata) | `normal`, `tuberculosis` |
 
-Approximate class balance after merging: Normal ~15,600, Pneumonia ~11,600, Covid-19 ~4,600, Tuberculosis ~1,000. Public TB chest-X-ray data is scarce, so TB is the smallest class; inverse-frequency class weighting compensates in the loss.
+Source 8 turned out to be a byte-identical re-upload of part of source 1. The content-hash
+deduplication in `collect_dataset()` catches it, which matters because the same image landing in
+both train and test would inflate every score reported here.
+
+Class balance in the training partition after sampling to 32,000: Normal 11,645, Pneumonia 6,888,
+Covid-19 2,759, Tuberculosis 1,127. Public TB chest-X-ray data is scarce, so TB stays the smallest
+class at roughly a tenth of Normal. Inverse-frequency class weighting compensates in the loss.
 
 ---
 
@@ -295,7 +326,7 @@ Training retrains the **DenseNet-121 classifier** that serves predictions, and o
 
 1. **Border crop + augmentation.** Every image is border-cropped 8%. Training adds geometric and photometric augmentation (random resized crop, flip, small rotation, brightness/contrast jitter, mild blur) to attack resolution and scanner cues that would otherwise let the model separate classes by their source dataset.
 2. **Class-weighted loss.** Cross-Entropy with inverse-frequency class weights (normalised to mean 1.0) counters the imbalance, so minority classes (Tuberculosis, Covid-19) are not drowned out.
-3. **Macro-F1 selection and scheduling.** Checkpoint selection, ReduceLROnPlateau, and early stopping (patience 4) all key on validation macro-F1, the honest target under a ~15:1 imbalance where accuracy misleads.
+3. **Macro-F1 selection and scheduling.** Checkpoint selection, ReduceLROnPlateau, and early stopping (patience 4) all key on validation macro-F1, the honest target under a ~10:1 imbalance where accuracy misleads.
 4. **Stability.** Gradients are clipped at `max_norm = 1.0`, NaN/Inf batches are skipped, and checkpoints are written atomically (temp file + rename, with retry) so a file-lock never corrupts a save.
 5. **Safe publishing.** The best checkpoint is reloaded and only swapped into the live model after the run ends, so inference never sees a half-trained model.
 
@@ -440,20 +471,30 @@ LungLens/
 
 ## Limitations
 
-1. **Unverified train/val split for the current checkpoint.** The figures should be read as an optimistic upper bound rather than a clean held-out clinical result.
-2. **Distilled segmentation inherits the classifier's mistakes.** The U-Net is a fast disease locator, not an independent ground-truth segmenter; that would require pixel-level masks the public datasets do not supply.
-3. **Label noise on the COVID boundary.** RICORD includes PCR-positive scans with little visible abnormality, adding noise that accounts for the 15 Covid-19 images predicted as Normal in the confusion matrix.
-4. **Source–class confounding.** Even after mitigations, source and class are partially tied by construction. Only a genuinely multi-source dataset for every class would remove the confound.
+1. **Pneumonia is under-detected.** 102 pneumonia radiographs are predicted as Normal, 56% of all
+   errors on the test set. The model misses subtle or early consolidation, which is exactly where
+   a triage tool needs to be strongest.
+2. **Distilled segmentation inherits the classifier's mistakes.** The U-Net reproduces its
+   teacher's Grad-CAM at a Dice of 0.481, so it is a fast disease locator rather than an
+   independent ground-truth segmenter. That would require pixel-level masks the public datasets do
+   not supply.
+3. **Label noise on the COVID boundary.** RICORD includes PCR-positive scans with little visible
+   abnormality, which adds noise to the Covid-19 class.
+4. **Source–class confounding.** Even after mitigations, source and class are partly tied by
+   construction, and per-source accuracy ranges from 0.833 to 0.995. Only a genuinely multi-source
+   dataset for every class would remove the confound.
 
 ---
 
 ## Future Work
 
-- **Patient-grouped retraining from scratch** to give a verified held-out score.
+- **Sensitivity-tuned decision threshold or focal loss** to attack the pneumonia-to-Normal
+  confusion, trading precision for the recall that matters clinically.
 - **Genuinely multi-source dataset per class** to break the remaining source–class confounding.
-- **Class-weighted loss + oversampling** to improve TB and Covid-19 minority representation further.
-- **Grad-CAM++** for sharper overlays (Chattopadhay et al., WACV 2018).
-- **Prospective radiologist validation** - the standard step before any clinical use.
+- **Oversampling the minority classes** on top of the existing inverse-frequency loss weights.
+- **Grad-CAM++** for sharper overlays (Chattopadhay et al., WACV 2018), which would also sharpen
+  the distilled segmentation head.
+- **Prospective radiologist validation**, the standard step before any clinical use.
 
 ---
 
