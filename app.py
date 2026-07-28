@@ -548,6 +548,16 @@ def collect_dataset():
     and Pneumonia are drawn from two sources each (and the radiography set spans
     every disease), so source no longer perfectly predicts the label the way it
     did when each class came from a single dataset.
+
+    Every listing is sorted, which is load-bearing for reproducibility, not
+    cosmetic. glob.glob returns filesystem order, so the same datasets enumerate
+    differently on different machines. _dedup_by_content keeps the FIRST copy of
+    a duplicate, so a different order keeps different survivors, which changes the
+    patient groups, which changes the split even under a fixed seed. Observed:
+    re-downloading the eight sources onto another node turned a 22419/4785/4796
+    split into 22420/4759/4821, silently moving training images into the test set
+    and inflating a re-scored checkpoint from 96.62% to 98.11%. Sorting makes the
+    split a pure function of (dataset contents, seed).
     """
     (tb_base, pn_base, cov_base, radio_base, shenzhen_base, montgomery_base,
      tbx11k_base, legrande_base) = get_dataset_paths()
@@ -559,7 +569,7 @@ def collect_dataset():
         sources.append(source)
         groups.append(_patient_group(source, os.path.basename(f)))
 
-    for f in glob.glob(os.path.join(tb_base, "**", "*.*"), recursive=True):
+    for f in sorted(glob.glob(os.path.join(tb_base, "**", "*.*"), recursive=True)):
         if not f.lower().endswith(IMAGE_EXTS):
             continue
         rel = os.path.relpath(f, tb_base).split(os.sep)
@@ -567,7 +577,7 @@ def collect_dataset():
         if label is not None:
             add(f, label, "tb_ds")
 
-    for f in glob.glob(os.path.join(pn_base, "**", "*.*"), recursive=True):
+    for f in sorted(glob.glob(os.path.join(pn_base, "**", "*.*"), recursive=True)):
         if not f.lower().endswith(IMAGE_EXTS):
             continue
         rel = os.path.relpath(f, pn_base).split(os.sep)
@@ -578,7 +588,7 @@ def collect_dataset():
     # RICORD is an all-positive Covid set. Guard against the non-image sidecar
     # files (.csv/.complete) with the extension filter, and require the image to
     # live under the study directory so a stray file in the root is not labelled.
-    for f in glob.glob(os.path.join(cov_base, "**", "*.*"), recursive=True):
+    for f in sorted(glob.glob(os.path.join(cov_base, "**", "*.*"), recursive=True)):
         if not f.lower().endswith(IMAGE_EXTS):
             continue
         if "midrc" not in f.lower():
@@ -589,7 +599,7 @@ def collect_dataset():
     # {images,masks}/*.png. Take ONLY the X-rays under images/; the masks/ folder
     # holds lung segmentation masks that share the class-folder ancestor and would
     # otherwise be mislabelled as chest films.
-    for f in glob.glob(os.path.join(radio_base, "**", "*.*"), recursive=True):
+    for f in sorted(glob.glob(os.path.join(radio_base, "**", "*.*"), recursive=True)):
         if not f.lower().endswith(IMAGE_EXTS):
             continue
         rel = os.path.relpath(f, radio_base).split(os.sep)
@@ -602,7 +612,7 @@ def collect_dataset():
 
     # Shenzhen TB set encodes the label in the filename suffix, not in a folder:
     # CHNCXR_<id>_0 = normal, CHNCXR_<id>_1 = TB-positive.
-    for f in glob.glob(os.path.join(shenzhen_base, "**", "*.png"), recursive=True):
+    for f in sorted(glob.glob(os.path.join(shenzhen_base, "**", "*.png"), recursive=True)):
         stem = os.path.splitext(os.path.basename(f))[0]
         m = re.match(r"CHNCXR_\d+_([01])$", stem)
         if not m:
@@ -610,7 +620,7 @@ def collect_dataset():
         add(f, 2 if m.group(1) == "1" else 0, "shenzhen_tb")
 
     # Montgomery TB set: same suffix scheme, MCUCXR_<id>_0/_1.
-    for f in glob.glob(os.path.join(montgomery_base, "**", "*.png"), recursive=True):
+    for f in sorted(glob.glob(os.path.join(montgomery_base, "**", "*.png"), recursive=True)):
         stem = os.path.splitext(os.path.basename(f))[0]
         m = re.match(r"MCUCXR_\d+_([01])$", stem)
         if not m:
@@ -632,7 +642,7 @@ def collect_dataset():
             for row in _csv.DictReader(fh):
                 type_by_fname[row["fname"]] = row["image_type"]
         tbx_map = {"healthy": 0, "tb": 2}
-        for fname, itype in type_by_fname.items():
+        for fname, itype in sorted(type_by_fname.items()):
             label = tbx_map.get(itype)
             if label is None:
                 continue
@@ -642,7 +652,7 @@ def collect_dataset():
 
     # legrande TB: folder-labelled Normal / Tuberculosis. Skip the obvious "Copy"
     # duplicates; the content-hash dedup below removes whatever else overlaps tb_ds.
-    for f in glob.glob(os.path.join(legrande_base, "**", "*.png"), recursive=True):
+    for f in sorted(glob.glob(os.path.join(legrande_base, "**", "*.png"), recursive=True)):
         if "copy" in os.path.basename(f).lower():
             continue
         rel = os.path.relpath(f, legrande_base).split(os.sep)
@@ -652,7 +662,7 @@ def collect_dataset():
 
     custom_base = os.path.join(os.path.dirname(__file__), "custom_dataset")
     if os.path.exists(custom_base):
-        for f in glob.glob(os.path.join(custom_base, "**", "*.*"), recursive=True):
+        for f in sorted(glob.glob(os.path.join(custom_base, "**", "*.*"), recursive=True)):
             if not f.lower().endswith(IMAGE_EXTS):
                 continue
             rel = os.path.relpath(f, custom_base).split(os.sep)
