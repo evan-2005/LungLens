@@ -151,62 +151,202 @@ if os.path.exists(log):
         print(f"training curves: {len(ep)} epochs, best epoch {ep[best]}")
 
 # ── Fig 1: pipeline diagram ──────────────────────────────────────────────────
-BLUE_D, BLUE_L = "#1b5e8a", "#dbe9f4"
-BRN_D, BRN_L, BRN_M = "#8c3a12", "#f0e0d6", "#d9b8a5"
-GREY = "#eef1f4"
+# Drawn with standard flowchart notation (process / predefined-process /
+# decision / data-store / terminator shapes) in black ink on white, the way a
+# pipeline is drawn by hand for a paper, rather than as a stack of uniformly
+# coloured slide boxes. Every number is read from chest_classifier_metrics.json
+# so the figure cannot drift from the served run.
+from matplotlib.patches import Rectangle, Polygon, Ellipse, Circle
 
-def box(ax, x, y, w, h, text, fc, ec, tc="black", bold=False, fs=9.5):
-    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.008,rounding_size=0.01",
-                                fc=fc, ec=ec, lw=1.5))
-    ax.text(x + w/2, y + h/2, text, ha="center", va="center", fontsize=fs,
-            color=tc, fontweight="bold" if bold else "normal", linespacing=1.35)
+INK      = "#1a1a1a"
+GREY_TXT = "#5a5a5a"
+RULE     = "#c9c9c9"
 
-def arrow(ax, x1, y1, x2, y2, c="#4a5a68", label=None, fs=8.5):
-    ax.add_patch(FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="-|>",
-                                 mutation_scale=16, lw=1.8, color=c))
-    if label:
-        ax.text((x1+x2)/2 + 0.012, (y1+y2)/2, label, fontsize=fs, color=c,
-                ha="left", va="center", style="italic")
+seg_dice = M.get("seg_val_dice", 0.0)
+seg_n    = M.get("seg_train_images", "?")
+epoch, epochs_req = M.get("epoch", "?"), M.get("epochs_requested", "?")
+n_train = M.get("train_samples", 0)
+n_val   = M.get("val_samples", 0)
+n_test  = M.get("test_samples", 0)
+n_total = n_train + n_val + n_test
 
-fig, ax = plt.subplots(figsize=(13.2, 7.4), dpi=200)
+def section_rule(ax, x, y, w, label_):
+    ax.text(x, y, label_, fontsize=11.5, fontweight="bold", color=INK, family="sans-serif")
+    ax.plot([x, x + w], [y - 0.016, y - 0.016], color=RULE, lw=1.0)
+
+_step = [0]
+def tag(ax, x, y):
+    """Small numbered marker at a shape's corner, the way a paper figure
+    numbers its own stages for reference in the body text."""
+    _step[0] += 1
+    ax.add_patch(Circle((x, y), 0.0105, fc="white", ec=INK, lw=0.8, zorder=5))
+    ax.text(x, y, str(_step[0]), ha="center", va="center", fontsize=6.3, zorder=6)
+
+def label(ax, cx, y, h, title, note, fs=8.8, bold=False):
+    ty = y + h - 0.028 if note else y + h / 2
+    ax.text(cx, ty, title, ha="center", va="center", fontsize=fs, color=INK,
+            fontweight="bold" if bold else "normal", linespacing=1.2, wrap=True)
+    if note:
+        ax.text(cx, y + 0.022, note, ha="center", va="center", fontsize=6.8,
+                color=GREY_TXT, family="monospace", linespacing=1.2)
+
+def rect(ax, x, y, w, h, title, note=None, numbered=True):
+    """Plain flowchart process box."""
+    ax.add_patch(Rectangle((x, y), w, h, fc="white", ec=INK, lw=1.05))
+    if numbered:
+        tag(ax, x + 0.008, y + h - 0.008)
+    label(ax, x + w / 2, y, h, title, note)
+
+def predef(ax, x, y, w, h, title, note=None):
+    """Flowchart 'predefined process': double side-bars mark a step that is
+    itself a whole subsystem, used only for the two trained networks."""
+    ax.add_patch(Rectangle((x, y), w, h, fc="white", ec=INK, lw=1.3))
+    inset = 0.010
+    ax.plot([x + inset, x + inset], [y, y + h], color=INK, lw=0.9)
+    ax.plot([x + w - inset, x + w - inset], [y, y + h], color=INK, lw=0.9)
+    tag(ax, x + 0.008, y + h - 0.008)
+    label(ax, x + w / 2, y, h, title, note, fs=9.0, bold=True)
+
+def cyl(ax, x, y, w, h, title, note):
+    """Flowchart data-store cylinder, used once for the raw dataset."""
+    eh = h * 0.26
+    ax.plot([x, x], [y + eh / 2, y + h - eh / 2], color=INK, lw=1.05)
+    ax.plot([x + w, x + w], [y + eh / 2, y + h - eh / 2], color=INK, lw=1.05)
+    ax.add_patch(Rectangle((x, y + eh / 2), w, h - eh, fc="white", ec="none", zorder=1))
+    ax.add_patch(Ellipse((x + w / 2, y + eh / 2), w, eh, fc="white", ec=INK, lw=1.05, zorder=2))
+    ax.add_patch(Ellipse((x + w / 2, y + h - eh / 2), w, eh, fc="white", ec=INK, lw=1.05, zorder=3))
+    tag(ax, x + 0.01, y + h - eh / 2 - 0.006)
+    # Single-line title and note, positioned clear of both ellipse curves. A
+    # two-line title in this box height collided with either the note below
+    # or the top ellipse above; one line each fits the available band cleanly.
+    ax.text(x + w / 2, y + h * 0.60, title, ha="center", va="center", fontsize=8.6)
+    ax.text(x + w / 2, y + h * 0.33, note, ha="center", va="center", fontsize=6.8,
+            color=GREY_TXT, family="monospace")
+
+def parallelogram(ax, x, y, w, h, title, note=None, slant=0.026):
+    pts = [(x + slant, y), (x + w, y), (x + w - slant, y + h), (x, y + h)]
+    ax.add_patch(Polygon(pts, closed=True, fc="white", ec=INK, lw=1.05))
+    tag(ax, x + slant + 0.012, y + h - 0.008)
+    label(ax, x + w / 2, y, h, title, note)
+
+def diamond(ax, cx, cy, w, h, title):
+    pts = [(cx, cy + h / 2), (cx + w / 2, cy), (cx, cy - h / 2), (cx - w / 2, cy)]
+    ax.add_patch(Polygon(pts, closed=True, fc="white", ec=INK, lw=1.05))
+    # Placed just inside the top vertex rather than above it, so the tag reads
+    # as unambiguously belonging to the diamond even when another shape (the
+    # "yes" branch box) sits directly above with only a small gap.
+    tag(ax, cx, cy + h / 2 - 0.026)
+    ax.text(cx, cy, title, ha="center", va="center", fontsize=7.3, linespacing=1.1, wrap=True)
+
+def fileicon(ax, x, y, w, h, filename):
+    """A folded-corner document icon for the two on-disk checkpoints, so a
+    trained artefact reads as a concrete file rather than an abstract label."""
+    fold = 0.02
+    pts = [(x, y), (x + w, y), (x + w, y + h - fold), (x + w - fold, y + h), (x, y + h)]
+    ax.add_patch(Polygon(pts, closed=True, fc="white", ec=INK, lw=1.05))
+    ax.add_patch(Polygon([(x + w - fold, y + h), (x + w, y + h - fold), (x + w - fold, y + h - fold)],
+                         closed=True, fc="#e6e6e6", ec=INK, lw=0.7))
+    ax.text(x + w / 2, y + h / 2, filename, ha="center", va="center",
+            fontsize=6.6, family="monospace")
+
+def go(ax, x1, y1, x2, y2, label_=None):
+    ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                arrowprops=dict(arrowstyle="-|>", lw=1.0, color=INK,
+                                mutation_scale=7.5, shrinkA=0, shrinkB=0))
+    if label_:
+        ax.text((x1 + x2) / 2 + 0.012, (y1 + y2) / 2, label_, fontsize=6.8,
+                color=GREY_TXT, ha="left", va="center", style="italic")
+
+def elbow(ax, x1, y1, x2, y2, bend=None, label_=None):
+    ymid = bend if bend is not None else (y1 + y2) / 2
+    ax.plot([x1, x1], [y1, ymid], color=INK, lw=1.0)
+    ax.plot([x1, x2], [ymid, ymid], color=INK, lw=1.0)
+    if label_:
+        ax.text((x1 + x2) / 2, ymid + 0.012, label_, fontsize=6.6, color=GREY_TXT,
+                ha="center", style="italic")
+    go(ax, x2, ymid, x2, y2)
+
+def row_var(widths, gap, x0=0.015, x1=0.985):
+    """Space boxes proportional to the given (hand-chosen, unequal) widths,
+    scaled to exactly fill x0..x1 so nothing overflows the frame."""
+    scale = (x1 - x0 - (len(widths) - 1) * gap) / sum(widths)
+    ws = [w_ * scale for w_ in widths]
+    xs_, cur = [], x0
+    for w_ in ws:
+        xs_.append(cur); cur += w_ + gap
+    return xs_, ws
+
+fig, ax = plt.subplots(figsize=(13.2, 10.0), dpi=200)
 ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
 
-ax.text(0.02, 0.965, "Stage 1: Train the served classifier", fontsize=14,
-        fontweight="bold", color=BLUE_D)
-w, h, y = 0.168, 0.135, 0.775
-xs = [0.02, 0.216, 0.412, 0.608, 0.804]
-box(ax, xs[0], y, w, h, "8 public CXR sources\n(TB · Pneumonia ·\nCOVID · Normal)\n37,553 unique images", BLUE_L, BLUE_D)
-box(ax, xs[1], y, w, h, "Content-hash dedup +\nfolder-relative labels +\npatient-grouped\nstratified split", BLUE_L, BLUE_D)
-box(ax, xs[2], y, w, h, "Border crop 8% ·\nresize 224 · crop ·\nflip · rotate ·\njitter · blur", BLUE_L, BLUE_D)
-box(ax, xs[3], y, w, h, "DenseNet-121\nclassifier\n(ImageNet init)", BLUE_D, BLUE_D, "white", True, 11)
-box(ax, xs[4], y, w, h, "Select on val\nmacro-F1 +\nearly stopping\n(best: epoch 11)", BLUE_L, BLUE_D)
+# ---- Stage 1 ----
+section_rule(ax, 0.015, 0.975, 0.97, "STAGE 1: TRAIN THE SERVED CLASSIFIER")
+h1, y1 = 0.125, 0.815
+xs1, ws1 = row_var([0.15, 0.21, 0.15, 0.19, 0.21], 0.018)
+cyl(ax, xs1[0], y1, ws1[0], h1, "Public CXR sources", f"8 sources, n={n_total:,}")
+rect(ax, xs1[1], y1, ws1[1], h1, "Dedup + label + split", "content-hash dedup\nsorted, patient-grouped")
+rect(ax, xs1[2], y1, ws1[2], h1, "Preprocess", "224px, crop 8%\naugment")
+predef(ax, xs1[3], y1, ws1[3], h1, "DenseNet-121", "class-weighted CE")
+rect(ax, xs1[4], y1, ws1[4], h1, "Select checkpoint", f"best val macro-F1\nepoch {epoch}/{epochs_req}")
 for i in range(4):
-    arrow(ax, xs[i] + w + 0.004, y + h/2, xs[i+1] - 0.004, y + h/2)
-arrow(ax, xs[3] + w/2, y - 0.006, xs[3] + w/2, 0.585, BRN_D, "trained\nweights")
+    go(ax, xs1[i] + ws1[i], y1 + h1 / 2, xs1[i + 1], y1 + h1 / 2)
 
-ax.text(0.02, 0.545, "Stage 2: Distil Grad-CAM into a disease-segmentation head",
-        fontsize=14, fontweight="bold", color=BRN_D)
-y2, w2 = 0.335, 0.215
-x2 = [0.135, 0.395, 0.655]
-box(ax, x2[0], y2, w2, 0.145, "Grad-CAM of the trained\nDenseNet (3,000 images,\ndenseblock4.denselayer16)", BRN_L, BRN_D)
-box(ax, x2[1], y2, w2, 0.145, "Soft target masks\n(disease-focused,\nnot anatomy)", BRN_M, BRN_D)
-box(ax, x2[2], y2, w2, 0.145, "U-Net segmentation head\n(distillation, Dice-BCE)\nval Dice 0.162", BRN_D, BRN_D, "white", True, 10)
-arrow(ax, x2[0] + w2 + 0.004, y2 + 0.0725, x2[1] - 0.004, y2 + 0.0725, BRN_D)
-arrow(ax, x2[1] + w2 + 0.004, y2 + 0.0725, x2[2] - 0.004, y2 + 0.0725, BRN_D)
+fx, fy, fw, fh = xs1[3] + ws1[3] / 2 - 0.075, 0.665, 0.15, 0.075
+elbow(ax, xs1[3] + ws1[3] / 2, y1, fx + fw / 2, fy + fh)
+fileicon(ax, fx, fy, fw, fh, "chest_model_4class.pth")
 
-ax.text(0.02, 0.275, "Inference (Gradio web app, CPU)", fontsize=14, fontweight="bold")
-y3, w3 = 0.055, 0.205
-x3 = [0.02, 0.265, 0.51, 0.755]
-box(ax, x3[0], y3, w3, 0.145, "Upload CXR", GREY, "#5a6b78")
-box(ax, x3[1], y3, w3, 0.145, "DenseNet-121\n→ class + confidence\n(<60% → Uncertain)", BLUE_D, BLUE_D, "white", True, 10)
-box(ax, x3[2], y3, w3, 0.145, "Overlay: Grad-CAM or\ndistilled U-Net\ndisease mask", BRN_D, BRN_D, "white", True, 10)
-box(ax, x3[3], y3, w3, 0.145, "Predicted class +\nclinical-language\nsummary", GREY, "#5a6b78")
-for i in range(3):
-    arrow(ax, x3[i] + w3 + 0.004, y3 + 0.0725, x3[i+1] - 0.004, y3 + 0.0725)
-ax.text(x3[1] + w3/2, y3 + 0.155, "uses trained classifier", fontsize=9,
-        ha="center", style="italic", color=BLUE_D)
-ax.text(x3[2] + w3/2, y3 + 0.155, "uses distilled seg head", fontsize=9,
-        ha="center", style="italic", color=BRN_D)
+# ---- Stage 2 ----
+section_rule(ax, 0.015, 0.615, 0.97,
+             "STAGE 2: DISTIL GRAD-CAM INTO A DISEASE-SEGMENTATION HEAD")
+h2, y2 = 0.125, 0.44
+xs2, ws2 = row_var([0.32, 0.32, 0.32], 0.022)
+# Explicit bend at 0.585: strictly between the rule at 0.599 and the box top
+# at 0.565, so the jog passes under the header instead of through its text.
+elbow(ax, fx + fw / 2, fy, xs2[0] + ws2[0] / 2, y2 + h2, bend=0.585)
+rect(ax, xs2[0], y2, ws2[0], h2, "Grad-CAM of classifier",
+     f"n={seg_n:,} images\ndenseblock4.denselayer16.conv2")
+rect(ax, xs2[1], y2, ws2[1], h2, "Soft target masks",
+     "continuous 0-1 heatmap\ndisease-focused, not anatomy")
+predef(ax, xs2[2], y2, ws2[2], h2, "U-Net segmentation head",
+       f"Dice-BCE loss, val Dice {seg_dice:.3f}")
+go(ax, xs2[0] + ws2[0], y2 + h2 / 2, xs2[1], y2 + h2 / 2)
+go(ax, xs2[1] + ws2[1], y2 + h2 / 2, xs2[2], y2 + h2 / 2)
+
+# ---- Inference ----
+section_rule(ax, 0.015, 0.40, 0.97, "INFERENCE: GRADIO WEB APP, CPU ONLY")
+ymain, hmain = 0.155, 0.11
+cy = ymain + hmain / 2
+xs3, ws3 = row_var([0.15, 0.205, 0.15, 0.205, 0.175], 0.02)
+parallelogram(ax, xs3[0], ymain, ws3[0], hmain, "Upload CXR")
+predef(ax, xs3[1], ymain, ws3[1], hmain, "DenseNet-121 forward pass",
+       "class + confidence\n<60% -> Uncertain")
+go(ax, xs3[0] + ws3[0], cy, xs3[1], cy)
+
+# Diamond geometry computed before the arrow that feeds it, so the arrow can
+# target its exact left vertex instead of a guessed point that overshot into
+# the diamond's interior.
+dcx, dw, dh = xs3[2] + ws3[2] / 2, ws3[2] * 0.95, 0.155
+go(ax, xs3[1] + ws3[1], cy, dcx - dw / 2, cy)
+diamond(ax, dcx, cy, dw, dh, "channel\nconfident?")
+
+ub_x, ub_y, ub_w, ub_h = dcx - 0.09, 0.305, 0.18, 0.075
+db_x, db_y, db_w, db_h = dcx - 0.09, 0.02, 0.18, 0.075
+# Both branches run straight up/down at x=dcx, so a plain arrow is used
+# instead of elbow(): elbow's forced jog overshot past the target and back,
+# which drew a short zigzag straight through the box's note text.
+go(ax, dcx, cy + dh / 2, dcx, ub_y)
+ax.text(dcx + 0.02, (cy + dh / 2 + ub_y) / 2, "yes", fontsize=6.8, color=GREY_TXT, style="italic")
+rect(ax, ub_x, ub_y, ub_w, ub_h, "U-Net disease mask", "distilled channel")
+go(ax, dcx, cy - dh / 2, dcx, db_y + db_h)
+ax.text(dcx + 0.02, (cy - dh / 2 + db_y + db_h) / 2, "no", fontsize=6.8, color=GREY_TXT, style="italic")
+rect(ax, db_x, db_y, db_w, db_h, "Live Grad-CAM", "classifier backward pass")
+
+rect(ax, xs3[3], ymain, ws3[3], hmain, "Overlay", "colour map + region outline")
+elbow(ax, ub_x + ub_w, ub_y + ub_h / 2, xs3[3] + ws3[3] / 2, ymain + hmain, bend=ub_y + ub_h / 2)
+elbow(ax, db_x + db_w, db_y + db_h / 2, xs3[3] + ws3[3] / 2, ymain, bend=db_y + db_h / 2)
+
+parallelogram(ax, xs3[4], ymain, ws3[4], hmain, "Result", "class + clinical\nsummary")
+go(ax, xs3[3] + ws3[3], cy, xs3[4], cy)
 
 fig.savefig(os.path.join(OUT, "fig1_pipeline.png"), bbox_inches="tight", facecolor="white")
 plt.close(fig)
