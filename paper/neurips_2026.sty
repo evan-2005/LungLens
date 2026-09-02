@@ -1,0 +1,129 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  neurips_2026.sty  --  DROP-IN COMPATIBILITY PLACEHOLDER
+%
+%  This is NOT the official NeurIPS 2026 style file. It is a small, self
+%  contained stand-in so that main.tex compiles to a reviewable PDF without a
+%  network round-trip to the venue's Overleaf template. It reproduces the
+%  NeurIPS *look* closely enough for drafting (single column, ~5.5in text
+%  block, centred small-caps title, "Abstract" heading, sentence-case bold
+%  sections) but makes no claim to be byte-identical to the real layout.
+%
+%  BEFORE SUBMISSION: replace this file with the official neurips_2026.sty
+%  from the venue and recompile. The option list below matches what main.tex
+%  passes ([dblblindworkshop]); the official file may name its workshop option
+%  differently, so check the template's own README.
+%
+%  Options recognised here (all optional, all degrade gracefully):
+%    preprint          - show a "Preprint. Under review." footer line
+%    final             - camera-ready mode (no line numbers, no submission note)
+%    dblblindworkshop  - double-blind workshop track (default assumption)
+%    workshop          - alias of the above
+%    nonatbib          - do NOT load natbib (main.tex uses \citep/\citet +
+%                        plainnat, so natbib loads by default)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{neurips_2026}[2026/01/01 v0.1 NeurIPS 2026 compatibility placeholder]
+
+\newif\if@nips@preprint      \@nips@preprintfalse
+\newif\if@nips@final         \@nips@finalfalse
+\newif\if@nips@natbib        \@nips@natbibtrue
+\newif\if@nips@workshop      \@nips@workshopfalse
+
+\DeclareOption{preprint}{\@nips@preprinttrue}
+\DeclareOption{final}{\@nips@finaltrue}
+\DeclareOption{nonatbib}{\@nips@natbibfalse}
+\DeclareOption{dblblindworkshop}{\@nips@workshoptrue}
+\DeclareOption{workshop}{\@nips@workshoptrue}
+\DeclareOption{dblblind}{\@nips@workshoptrue}
+% Anything else: warn once and carry on, so an unknown venue option never
+% blocks a compile.
+\DeclareOption*{\PackageWarning{neurips_2026}{Unknown option `\CurrentOption' ignored by the placeholder style.}}
+\ProcessOptions\relax
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  Page geometry: US letter, single column, NeurIPS-ish text block.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\RequirePackage[letterpaper,
+  left=1.5in, right=1.5in, top=1.0in, bottom=1.0in,
+  headheight=12pt]{geometry}
+
+\RequirePackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[C]{\thepage}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\thepage}\renewcommand{\headrulewidth}{0pt}}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6\baselineskip plus 2pt minus 1pt}
+\linespread{1.03}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  Section headings: sentence case, bold, modest steps in size.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\RequirePackage[compact]{titlesec}
+\titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titleformat{\paragraph}[runin]{\normalfont\normalsize\bfseries}{}{0pt}{}[.]
+\titlespacing*{\section}{0pt}{2.2ex plus 1ex minus .2ex}{1.2ex plus .2ex}
+\titlespacing*{\subsection}{0pt}{1.8ex plus 1ex minus .2ex}{1.0ex plus .2ex}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  Title block. \maketitle centres the title, then the \author block, then a
+%  rule. Small-caps title in the NeurIPS spirit.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\renewcommand{\@maketitle}{%
+  \newpage
+  \null
+  \vskip 1.5em%
+  \begin{center}%
+    {\LARGE\bfseries \@title \par}%
+    \vskip 1.2em%
+    {\normalsize \lineskip .5em \begin{tabular}[t]{c}\@author\end{tabular}\par}%
+  \end{center}%
+  \par
+  \vskip 1.0em
+  \hrule height 0.4pt
+  \vskip 1.2em
+}
+
+% NeurIPS uses \And / \AND to separate authors in the \author argument.
+\providecommand{\And}{\end{tabular}\hspace{1.5em}\begin{tabular}[t]{c}}
+\providecommand{\AND}{\end{tabular}\hspace{1.0em}\begin{tabular}[t]{c}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  Abstract: indented block, centred bold "Abstract" heading.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\renewenvironment{abstract}{%
+  \begin{center}{\bfseries Abstract}\end{center}%
+  \begin{list}{}{\setlength{\leftmargin}{0.5in}\setlength{\rightmargin}{0.5in}}%
+  \item[]\itshape\small\ignorespaces
+}{%
+  \end{list}\vskip 1.0em
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  Bibliography: natbib unless [nonatbib]. main.tex sets \bibliographystyle
+%  {plainnat}, which requires natbib.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\if@nips@natbib
+  \RequirePackage[numbers,sort&compress,square,comma]{natbib}
+\fi
+\renewcommand{\bibsection}{\section*{References}\small}
+\setlength{\bibsep}{2pt plus 1pt}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  Submission note (preprint / non-final only).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\if@nips@final\else
+  \if@nips@preprint
+    \fancyfoot[C]{\thepage\\[2pt]\footnotesize Preprint. Under review.}
+  \else
+    \fancyfoot[C]{\thepage\\[2pt]\footnotesize
+      \if@nips@workshop Submitted to a NeurIPS 2026 workshop (double blind). \fi
+      Do not distribute.}
+  \fi
+\fi
+
+\endinput

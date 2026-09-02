@@ -1,0 +1,24 @@
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+*.run.xml
+*.bcf
+
+# MiKTeX / latexmk auxiliary
+_minted*/
+*.pdfsync
+
+# Keep the built PDF tracked (see paper/README.md); everything else above is derived.
+!main.pdf
