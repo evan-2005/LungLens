@@ -146,3 +146,13 @@ dmypy.json
 runs/
 training_curves.png
 .codemap/
+
+
+# Paper figure outputs (regenerated from make_fig*.py)
+figures/
+
+# Figure exploration scratch dirs: keep the scripts, ignore generated artifacts
+fig1_work/*
+!fig1_work/*.py
+fig7_work/*
+!fig7_work/*.py
