@@ -6,41 +6,54 @@ LaTeX source for the LungLens localisation-grounded report-faithfulness audit.
 
 | File | Purpose |
 | --- | --- |
-| `main.tex` | Manuscript source. |
-| `main.bib` | Bibliography (30 entries, one per cited key). |
-| `neurips_2026.sty` | **Compatibility placeholder**, not the official venue style. See the header of that file. Replace with the official `neurips_2026.sty` before submission and recompile. |
-| `figures/` | Figure PDFs. Two are referenced: `fig3_revised.pdf` (system diagram) and `paired_summary.pdf` (S0-vs-S1 comparison). If a file is absent, `main.tex` renders an inline placeholder via `\IfFileExists`, so the document still compiles. |
-| `main.pdf` | Built output, committed for convenience. |
+| `main.tex` | Manuscript. Body is **7 pages** (limit is 9; references, checklist, and appendices do not count). |
+| `main.bib` | Bibliography, 30 entries, one per cited key. |
+| `checklist.tex` | NeurIPS paper checklist, `\input` at the end of `main.tex`. Placeholder for the official `checklist.tex`; answers transfer directly. |
+| `neurips_2026.sty` | **Compatibility placeholder**, built to match the documented layout (17 pt title between a 4 pt and a 1 pt rule, 5.5 x 9 in text block, 1.5 in left margin, 10/11 pt Times, line numbers in submission mode, sentence-case bold headings, hidden `\begin{ack}`). Replace with the official file from <https://neurips.cc> before submission. |
+| `figures/` | `fig3_revised.pdf` (system diagram) and `paired_summary.pdf` (S0 vs S1) are referenced; if absent, `main.tex` renders an inline placeholder via `\IfFileExists`, so it still compiles. |
+| `main.pdf` | Built output. |
+
+## Track
+
+`main.tex` currently uses `\usepackage{neurips_2026}` (the shell default = Main
+Track, double-blind, line numbers on). To target a workshop, uncomment
+`\usepackage[dblblindworkshop]{neurips_2026}` and add `\workshoptitle{...}`.
 
 ## Build
 
 ```bash
 cd paper
-latexmk -pdf main.tex        # preferred
-# or, without latexmk:
 pdflatex main && bibtex main && pdflatex main && pdflatex main
 ```
 
-MiKTeX installs any missing packages (`natbib`, `titlesec`, `tikz`, `microtype`, ...) on first run.
+MiKTeX installs missing packages (`natbib`, `titlesec`, `lineno`, `comment`,
+`tikz`, `microtype`, ...) on first run.
 
-## Status of the `\todo{}` markers
+## Fact-check log
 
-All `\todo{}` markers from the drafting passes are resolved:
+Every repository-dependent number was checked against the public code, the
+served `chest_classifier_metrics.json`, and the analysis outputs in
+`figures/RESULTS_FOR_PAPER.md` / `fig7_work/`. Corrections applied in this pass:
 
-- **Seg epochs = 20** and **Stage-2 loss = unweighted Dice+BCE alone**: confirmed against
-  the public repo (`chest_classifier_metrics.json` byte-identical between commit `a25f54f`
-  and HEAD; `app.py` `train_segmentation_head` uses `DiceBCELoss()` with no cross-entropy
-  term). Stated as fact in Section 3.3.
-- **`MultiTaskUNet` parameter count = 7,705,224**: from the served checkpoint's state dict.
-- **RUN-04 / RUN-05** (per-film H1-vs-H3 pairing; per-stage latency split): not run;
-  now written as scoped future-work sentences with no invented numbers.
-- **Checklist**: expanded to a full answered list.
-- **Dataset licenses**: the eight Kaggle IDs are named; per-dataset terms are left to be
-  transcribed individually for the camera-ready (they are not uniform).
+- **Per-class recall range** was "92.2% (pneumonia) to 98.5% (tuberculosis)".
+  98.5% is Normal's recall; tuberculosis recall is 95.1% (from the confusion
+  matrix). Now reads "to 98.5% (Normal)".
+- **Latency** was a table captioned "N=11 with the first excluded". The per-path
+  figures (293 / 560 / 318 ms) come from a 40-request run split by overlay path;
+  the "N=11" runs were a separate check. The table is now one prose sentence
+  with the per-path means and the 91% / 9% test-set serving split.
+
+Verified unchanged: 96.18% accuracy, 95.77 macro-F1, the confusion matrix,
+per-class precision/recall/F1/specificity (all consistent with the matrix),
+7,705,224 U-Net parameters, median Dice 0.22 (27% zero overlap, 15% > 0.5),
+in-lung gate 92/245, H5 grounding 14/92, the 5.9 / 8.9 / 4.0 grey-level probe,
+per-source 83.3%–99.5%, and the 22,419/4,785/4,796 -> 22,420/4,759/4,821 /
+96.62% -> 98.11% reproducibility incident (commit `7a2cd81`).
 
 ## Known repo-hygiene items (not paper issues)
 
-- `README.md` in the repo root documents the Stage-2 loss as
-  `CrossEntropyLoss + 2.0 * DiceBCELoss`, which does not match any code path that runs.
-- `README.md`'s confusion-matrix table does not match `chest_classifier_metrics.json`;
-  the paper uses the JSON matrix.
+- Repo `README.md` documents the Stage-2 loss as
+  `CrossEntropyLoss + 2.0 * DiceBCELoss`; no code path runs that (it is
+  `DiceBCELoss()` alone).
+- Repo `README.md`'s confusion matrix does not match
+  `chest_classifier_metrics.json`; the paper uses the JSON matrix.

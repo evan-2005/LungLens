@@ -1,0 +1,74 @@
+% checklist.tex -- placeholder for the official NeurIPS 2026 checklist.tex.
+% Replace with the venue file; the answers below transfer directly.
+% Self-contained: defines its own answer macros so it compiles without the
+% official style file.
+
+\providecommand{\answerYes}[1][]{\textbf{[Yes]} #1}
+\providecommand{\answerNo}[1][]{\textbf{[No]} #1}
+\providecommand{\answerNA}[1][]{\textbf{[NA]} #1}
+\providecommand{\answerTODO}[1][]{\textbf{[TODO]} #1}
+
+\section*{NeurIPS paper checklist}
+
+\begin{enumerate}
+
+\item \textbf{Claims.} Do the abstract and introduction state claims that match the paper's contributions and scope?\\
+\answerYes{The central claim, that the deployed summary does not read the mask, is a source-level fact quoted verbatim in Section~\ref{sec:reportgen} and Appendix~\ref{app:templates}. The abstract and Section~\ref{sec:limitations} state which evaluation-grid cells are measured and which are proposed.}
+
+\item \textbf{Limitations.} Does the paper discuss the limitations of the work?\\
+\answerYes{Section~\ref{sec:limitations}: unrun cells (H2, H4, S3/S4), no clinician ratings, dataset-source confounding, label noise in the dominant error mode, and the reproducibility fragility of the split.}
+
+\item \textbf{Theory.} Are assumptions and proofs given for every theoretical result?\\
+\answerNA{The paper reports measurements, not theorems. The one derived bound (localisation quality upper-bounds spatial-claim correctness) is stated with the Dice measurement it rests on.}
+
+\item \textbf{Experimental reproducibility.} Is there enough information to reproduce the main results?\\
+\answerYes{The audited system is public (repository withheld for double blind). The descriptor extractor, the summary reconstructions, the thresholds, and the derangement seed are in Section~\ref{sec:design}; the 245-film scoring table and mask arrays are the system's own published analysis outputs.}
+
+\item \textbf{Open access to data and code.} Are data and code available?\\
+\answerYes{The audited system and its analysis outputs are public. No new model was trained.}
+
+\item \textbf{Experimental settings.} Are training and test details specified?\\
+\answerYes{For the components this paper adds there is no training (Section~\ref{sec:design}). The fixed upstream classifier and U-Net settings are in Section~\ref{sec:system} and Appendix~\ref{app:classification}.}
+
+\item \textbf{Error bars.} Are error bars or other measures of statistical significance reported?\\
+\answerYes{Distributions (latency, Dice) carry a mean and standard deviation or a median. Single-number rates are exact counts over the full 245-film pool, so a confidence interval would describe sampling that did not occur.}
+
+\item \textbf{Compute.} Is the compute for the experiments reported?\\
+\answerYes{The analysis is geometry over saved mask arrays and runs in seconds on a CPU; latency figures are from one laptop CPU (i7-13620H, 10 threads). No GPU, no training.}
+
+\item \textbf{Code of ethics.} Does the research conform to the NeurIPS Code of Ethics?\\
+\answerYes{A retrospective audit of an existing research and educational prototype; no patient contact; the interface already carries a non-diagnostic disclaimer this paper argues should be more prominent.}
+
+\item \textbf{Broader impacts.} Are potential positive and negative societal impacts discussed?\\
+\answerYes{Section~\ref{sec:limitations} (Broader impact): the persuasiveness of a label plus a plausible heatmap plus a fluent summary, and why this paper is a caution against it.}
+
+\item \textbf{Safeguards.} Are safeguards described for any high-risk release?\\
+\answerNA{No models, datasets, or scrapers are released.}
+
+\item \textbf{Licenses.} Are existing assets credited and their licenses respected?\\
+\answerYes{Backbone, localisation method, and segmentation architecture are cited in Section~\ref{sec:system}. The eight source datasets are public Kaggle datasets, named by their exact identifiers so each license can be consulted on its own page:
+\begin{itemize}\setlength{\itemsep}{0pt}\ttfamily\footnotesize
+\item tawsifurrahman/tuberculosis-tb-chest-xray-dataset
+\item pcbreviglieri/pneumonia-xray-images
+\item raddar/ricord-covid19-xray-positive-tests
+\item tawsifurrahman/covid19-radiography-database
+\item raddar/tuberculosis-chest-xrays-shenzhen
+\item raddar/tuberculosis-chest-xrays-montgomery
+\item vbookshelf/tbx11k-simplified
+\item legrande/tbdata
+\end{itemize}
+Terms differ per dataset; the camera-ready should transcribe each from its source page.}
+
+\item \textbf{New assets.} Are new assets documented?\\
+\answerNA{No new assets are released with this submission.}
+
+\item \textbf{Crowdsourcing and human subjects.} Are crowdsourcing and IRB details given?\\
+\answerNA{No human subjects, no crowdsourcing, no clinician annotation was collected.}
+
+\item \textbf{IRB / risk for human subjects.} Were risks disclosed and approvals obtained?\\
+\answerNA{No human-subjects research was conducted.}
+
+\item \textbf{LLM usage.} Is any LLM use in the core method declared?\\
+\answerNA{No LLM is used in the method. S2/S3/S4 LLM conditions are named as out of scope and not run.}
+
+\end{enumerate}
