@@ -25,8 +25,6 @@
 \usepackage{xcolor}
 \usepackage{graphicx}
 \usepackage{listings}
-\usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning}
 \lstset{basicstyle=\ttfamily\scriptsize, breaklines=true, breakatwhitespace=true,
         columns=fullflexible, keepspaces=true, frame=single,
         showstringspaces=false, xleftmargin=2pt, xrightmargin=2pt}
@@ -93,34 +91,8 @@ The version under review disposed of this subsystem in eleven words. Section~\re
 
 \begin{figure}[t]
   \centering
-  \IfFileExists{figures/fig3_revised.pdf}{%
-    \includegraphics[width=0.92\linewidth]{figures/fig3_revised.pdf}%
-  }{%
-  \scriptsize
-  \begin{tikzpicture}[
-      node distance=6mm and 6mm,
-      box/.style={draw, rounded corners=2pt, align=center, inner sep=3pt, minimum height=7mm, font=\scriptsize},
-      stage/.style={box, fill=black!4},
-      flow/.style={-{Latex[length=1.6mm]}, semithick},
-      nofeed/.style={-{Latex[length=1.6mm]}, dashed, semithick, red!60!black}]
-    \node[stage] (img) {radiograph\\ 8\% crop};
-    \node[stage, right=of img] (dn) {DenseNet-121};
-    \node[box, right=of dn] (pred) {class\\ $+$ confidence};
-    \node[stage, below=10mm of dn] (teach) {frozen teacher};
-    \node[stage, left=of teach] (target) {Grad-CAM\\ target};
-    \node[stage, right=of teach] (student) {U-Net\\ (1 pass)};
-    \node[box, below=8mm of student] (mask) {served mask\\ (side/zone/extent\\ never read)};
-    \node[stage, right=of pred, minimum width=20mm] (rep) {report\\ generator};
-    \node[box, right=of rep] (txt) {summary};
-    \draw[flow] (img) -- (dn); \draw[flow] (dn) -- (pred);
-    \draw[flow] (dn) -- (teach); \draw[flow] (teach) -- (target); \draw[flow] (target) -- (student);
-    \draw[flow] (student) -- (mask); \draw[flow] (pred) -- (rep); \draw[flow] (rep) -- (txt);
-    \draw[flow] (student) to[out=15,in=250] node[pos=0.6,below=1pt,font=\scriptsize]{provenance flag} (rep.south west);
-    \draw[nofeed] (mask.east) to[out=0,in=290] node[pos=0.5,right=1pt,font=\scriptsize]{not an input} (rep.south);
-  \end{tikzpicture}\\[2pt]
-  \textit{(Inline placeholder; a vector \texttt{figures/fig3\_revised.pdf} overrides it.)}
-  }
-  \caption{The report-generation block and its real inputs. Only the predicted class, its confidence, and a same/different-network provenance flag reach it; the dashed line shows what does not. Stage 2 is drawn as four blocks (frozen teacher, cached Grad-CAM target, stop-gradient, U-Net student) to make the one-way channel explicit.}
+  \includegraphics[width=\linewidth]{figures/fig3.pdf}
+  \caption{System overview. Stage 1 trains the served DenseNet-121 classifier. Stage 2 supervises a U-Net student on Grad-CAM targets cached from the frozen classifier (stop-gradient marked): no layers, logits, or features are shared, so the only channel is one $224\times224$ scalar field per image, amortising the backward pass out of serving. At inference the classifier supplies label and confidence; the localiser supplies gated region descriptors; both arrive at the report generator, a class-keyed template (S0), which alone determines the printed summary. Tags mark where H0--H5 and S0--S4 enter.}
   \label{fig:fig3}
 \end{figure}
 
@@ -183,7 +155,7 @@ S1, gated on in-lung fraction, states a spatial claim on 92 of 245 films (37.6\%
   \end{minipage}\\[2pt]
   \textit{(Reconstructed from the template in Appendix~\ref{app:templates} and the film's measured descriptors; \texttt{figures/paired\_summary.pdf} overrides.)}
   }
-  \caption{Same radiograph (COVID-3348, predicted Covid-19 at 99.1\%), same classifier output. S0 is identical with or without a mask; S1 adds a spatial claim built from the film's own descriptors. Both are language over measured pixels, not a clinical finding.}
+  \caption{The same radiograph, predicted Covid-19 at 99.1\% confidence, under both generators. S0 is identical whether or not a mask is available; S1 adds a spatial claim built from the film's own descriptors. Both are language over measured pixels, not a clinical finding.}
   \label{fig:paired}
 \end{figure}
 
