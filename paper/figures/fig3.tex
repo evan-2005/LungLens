@@ -97,13 +97,13 @@
 \node[lbl, okgrey, below=0.4mm of s3-gate1] {no: Uncertain};
 
 \node[frozen, proc, text width=13mm] (s3-loc) at (0.98,0.60) {\tiny U-Net (served)};
-\node[frozen, proc, text width=13mm, minimum height=4.5mm, below=2mm of s3-loc] (s3-fb) {{\tiny Grad-CAM fallback\\(23/245 films)}};
+\node[frozen, proc, text width=13mm, minimum height=4.5mm, below=1mm of s3-loc] (s3-fb) {{\tiny Grad-CAM fallback\\(23/245 films)}};
 \node[artefact, proc, text width=13mm, right=5mm of s3-loc] (s3-mask) {\tiny mask + overlay\\(cleaned)};
 \node[artefact, proc, text width=14mm, right=5mm of s3-mask] (s3-desc) {\tiny descriptors:\\laterality, zone,\\extent, focality};
 \node[gate, minimum width=9mm, right=3mm of s3-desc] (s3-gate2) {in-lung\\$\ge$0.5?};
 \node[lbl, okgrey, below=0.4mm of s3-gate2] {no: suppressed};
 
-\node[tag, above=0.5mm of s3-mask] (tagH) {H0--H5 enters here};
+\node[tag, above=1.8mm of s3-mask] (tagH) {H0--H5 enters here};
 \draw[okvermillion, line width=0.45pt, -{Latex[length=1mm]}] (tagH.south) -- (s3-mask.north);
 
 % small vector heatmap glyph under the mask node -- concentric blue/yellow/red
@@ -117,7 +117,7 @@
 \end{scope}
 
 \node[lang, proc, text width=15mm, right=6mm of s3-gate2] (s3-rep) {\textbf{\footnotesize Template (S0)}\\{\tiny class-keyed generator}};
-\node[tag, above=0.5mm of s3-rep, xshift=-5mm] (tagS) {S0--S4 enters here};
+\node[tag, above=1.8mm of s3-rep, xshift=-5mm] (tagS) {S0--S4 enters here};
 \draw[okvermillion, line width=0.45pt, -{Latex[length=1mm]}] (tagS.south) -- (s3-rep.north west);
 \node[lang, proc, text width=13mm, right=5mm of s3-rep] (s3-sum) {\footnotesize Clinical\\summary};
 
