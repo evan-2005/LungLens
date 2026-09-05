@@ -2,8 +2,9 @@
 
 The whole project is packaged as **`LungLens_paper_overleaf.zip`**. It compiles
 as-is (verified: extracted to a clean folder and rebuilt from scratch with
-`pdflatex` + `bibtex`, 15 pages, no errors). You do not need to install
-anything locally to edit it — Overleaf compiles in the browser.
+`pdflatex` + `bibtex`, 14 pages, no errors) and already uses the **official
+NeurIPS 2026 style file** (not a placeholder — see step 2). You do not need to
+install anything locally to edit it — Overleaf compiles in the browser.
 
 ## 1. Upload it
 
@@ -16,36 +17,31 @@ anything locally to edit it — Overleaf compiles in the browser.
    (top left, next to the project name) -> **Settings** -> set **Main document**
    to `main.tex`.
 5. Click **Recompile** (green button, top of the PDF preview pane). You should
-   get the same 15-page PDF, with a NeurIPS-style layout and line numbers down
+   get the same 14-page PDF, with a NeurIPS-style layout and line numbers down
    the left margin.
 
-## 2. Swap in the official NeurIPS style file (do this before submitting)
+## 2. Style file (already the official one — nothing to swap)
 
-`neurips_2026.sty` in this project is **a compatibility placeholder I wrote**,
-not the official venue file — it is close enough to draft against (same page
-geometry, same title/heading style, same page limit) but is not guaranteed
-byte-identical to what the venue expects.
+`neurips_2026.sty` in this project **is the official NeurIPS 2026 file**
+(2026-01-29 revision, downloaded verbatim from the venue's own template
+source and diffed against it byte-for-byte — not a hand-written stand-in).
+Earlier drafts of this project used a placeholder `.sty` I'd built by hand;
+that has been replaced, so there is no swap step left to do here.
 
-1. Open <https://www.overleaf.com/latex/templates/formatting-instructions-for-neurips-2026/bjdwqfdkyftc>
-   in a new tab.
-2. Click **Open as Template** (or download the zip from that page).
-3. From that official template, copy `neurips_2026.sty` (and `checklist.tex`,
-   if you want the venue's own checklist macros instead of mine) into this
-   project, overwriting the placeholder files. In Overleaf: left-hand file
-   list -> Upload -> select the file -> confirm overwrite.
-4. Recompile. `main.tex` already uses the standard `\usepackage{neurips_2026}`
-   call (Main Track, double-blind, the shell's own default), so nothing else
-   in `main.tex` needs to change for this swap.
-5. If you're targeting a workshop instead of the main track, open `main.tex`
-   and change the package line near the top:
-   ```latex
-   \usepackage{neurips_2026}
-   ```
-   to
-   ```latex
-   \usepackage[dblblindworkshop]{neurips_2026}
-   \workshoptitle{Name of the workshop}
-   ```
+`main.tex` is currently set to target the **Med-Reasoner workshop** at
+NeurIPS 2026:
+```latex
+\usepackage[dblblindworkshop]{neurips_2026}
+\workshoptitle{Medical Reasoning with Vision Language Foundation Models (Med-Reasoner)}
+```
+If you instead need the main track, change that line back to
+`\usepackage{neurips_2026}` and remove the `\workshoptitle{...}` line.
+
+Note: in submission mode the PDF's footer always reads "Submitted to the
+40th Conference on Neural Information Processing Systems (NeurIPS 2026). Do
+not distribute." — it does **not** print the workshop name until camera-ready
+(`\usepackage[final]{neurips_2026}`). That's the official file's own
+behaviour, not a bug in this project.
 
 ## 3. What's in the project
 
@@ -54,7 +50,7 @@ byte-identical to what the venue expects.
 | `main.tex` | The manuscript. Edit this for text changes. |
 | `main.bib` | The 30 references, in BibTeX format. Add new ones here; cite with `\citep{key}` / `\citet{key}`. |
 | `checklist.tex` | The NeurIPS paper checklist, `\input` at the very end of `main.tex`. Edit answers here, not in `main.tex`. |
-| `neurips_2026.sty` | The venue style file — placeholder, see step 2 above. |
+| `neurips_2026.sty` | The official venue style file (see step 2 above). |
 | `figures/fig3.tex` + `fig3.pdf` | The system-overview diagram (Figure 1), hand-drawn in TikZ. `main.tex` includes the `.pdf`; if you edit `fig3.tex` you need to recompile it separately (see below) and re-upload `fig3.pdf`, since Overleaf does not compile standalone sub-documents automatically. |
 | `figures/fig_dice_hist.pdf` | Dice histogram (Section 3.1). |
 | `figures/fig_descriptors.pdf` | Region-descriptor bar charts (Appendix D). |
@@ -87,8 +83,8 @@ Either way, `main.tex` itself never changes — it just does
 The body (Introduction through Conclusion) must stay at or under **9 pages**;
 references, the checklist, and the appendices do not count. After any edit,
 recompile and check which page "References" starts on (Overleaf's PDF viewer
-shows page numbers at the top). It currently starts on page 8, so there is
-headroom.
+shows page numbers at the top). It currently starts on page 7 (Conclusion
+and References both fit on the same page), so there is headroom.
 
 ## 6. Getting the PDF back out
 

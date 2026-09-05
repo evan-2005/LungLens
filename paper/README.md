@@ -9,9 +9,9 @@ LaTeX source for the LungLens localisation-grounded report-faithfulness audit.
 | `main.tex` | Manuscript. Body is **7 pages** (limit is 9; references, checklist, and appendices do not count). |
 | `main.bib` | Bibliography, 30 entries, one per cited key. |
 | `checklist.tex` | NeurIPS paper checklist, `\input` at the end of `main.tex`. Placeholder for the official `checklist.tex`; answers transfer directly. |
-| `neurips_2026.sty` | **Compatibility placeholder**, built to match the documented layout (17 pt title between a 4 pt and a 1 pt rule, 5.5 x 9 in text block, 1.5 in left margin, 10/11 pt Times, line numbers in submission mode, sentence-case bold headings, hidden `\begin{ack}`). Replace with the official file from <https://neurips.cc> before submission. |
+| `neurips_2026.sty` | **Official NeurIPS 2026 style file** (2026-01-29 revision), downloaded verbatim, unmodified. Defines `dblblindworkshop`/`\workshoptitle` used by `main.tex`; the submission-mode footer always reads "Submitted to the 40th Conference on Neural Information Processing Systems (NeurIPS 2026). Do not distribute." regardless of track -- the workshop name only appears in the footer under `\@neuripsfinal` (camera-ready), which is correct upstream behaviour, not a bug. |
 | `figures/` | System diagram, 3 data charts, and the qualitative-overlay figure; see `figures/README.md`. `paired_summary.pdf` (S0 vs S1) isn't committed yet -- `main.tex` renders an inline placeholder via `\IfFileExists`, so it still compiles. |
-| `main.pdf` | Built output. 15 pages total; body is still 7 pages (references/checklist/appendices don't count). |
+| `main.pdf` | Built output. 14 pages total under the official style file; body is still 7 pages (references/checklist/appendices don't count). |
 | `OVERLEAF_STEPS.md` | How to open this project in Overleaf and what to edit where. |
 
 A ready-to-upload `LungLens_paper_overleaf.zip` (this directory, minus the
