@@ -71,12 +71,12 @@
 % target, trainable student.
 % =====================================================================
 \node[frozen, proc, text width=16mm] (s2-teach) at (0.30,2.62) {\textbf{Frozen}\\\textbf{DenseNet-121} $\theta_c$};
-\node[artefact, proc, text width=17mm, right=24mm of s2-teach] (s2-cam) {Cached CAM target\\{\tiny ReLU, resize $224^2$,\\min--max norm.\\precomputed once}};
+\node[artefact, proc, text width=22mm, right=28mm of s2-teach] (s2-cam) {Cached CAM target\\{\tiny ReLU, resize $224^2$, min--max norm.; precomputed once}};
 \node[data, proc, text width=15mm, below=9mm of s2-teach] (s2-img) {\tiny Preprocessed image};
-\node[train, proc, text width=15mm, right=24mm of s2-img] (s2-unet) {\textbf{U-Net}\\\textbf{student} $\theta_s$};
+\node[train, proc, text width=15mm, right=28mm of s2-img] (s2-unet) {\textbf{U-Net}\\\textbf{student} $\theta_s$};
 \node[loss, minimum width=13mm, minimum height=12mm] (s2-loss) at ($(s2-cam.east)!0.5!(s2-unet.east)+(11mm,0)$) {\tiny Dice\\+ BCE};
 
-\draw[fwd] (s2-teach) -- node[lbl, above, text width=17mm, pos=0.5]{Grad-CAM @\\\texttt{\scriptsize denseblock4.}\\\texttt{\scriptsize denselayer16.conv2}} (s2-cam);
+\draw[fwd] (s2-teach.east) -- node[lbl, above, text width=14mm, pos=0.36]{Grad-CAM @\\\texttt{\scriptsize denseblock4.}\\\texttt{\scriptsize denselayer16.conv2}} (s2-cam.west);
 \draw[okvermillion, line width=1.1pt] ($(s2-teach.east)+(4.5mm,-2.2mm)$) -- ++(0,4.4mm);
 \node[okvermillion, font=\fontsize{4.6}{5}\selectfont, align=center] at ($(s2-teach.east)+(4.5mm,-4.4mm)$) {stop-grad};
 \draw[fwd] (s2-img) -- (s2-unet);
@@ -117,8 +117,8 @@
 \end{scope}
 
 \node[lang, proc, text width=15mm, right=6mm of s3-gate2] (s3-rep) {\textbf{\footnotesize Template (S0)}\\{\tiny class-keyed generator}};
-\node[tag, above=0.5mm of s3-rep] (tagS) {S0--S4 enters here};
-\draw[okvermillion, line width=0.45pt, -{Latex[length=1mm]}] (tagS.south) -- (s3-rep.north);
+\node[tag, above=0.5mm of s3-rep, xshift=-5mm] (tagS) {S0--S4 enters here};
+\draw[okvermillion, line width=0.45pt, -{Latex[length=1mm]}] (tagS.south) -- (s3-rep.north west);
 \node[lang, proc, text width=13mm, right=5mm of s3-rep] (s3-sum) {\footnotesize Clinical\\summary};
 
 \draw[fwd] (s3-img) -- (s3-cls);
@@ -128,7 +128,7 @@
 \draw[fallback] (s3-fb.east) -| ($(s3-fb.east)+(2.2mm,0)$) |- (s3-mask.240);
 \draw[fwd] (s3-mask) -- (s3-desc);
 \draw[fwd] (s3-desc) -- (s3-gate2);
-\draw[fwd] (s3-gate1.east) -| node[lbl, pos=0.62, above, text width=16mm]{label + confidence} (s3-rep.north);
+\draw[fwd] (s3-gate1.east) -| node[lbl, pos=0.62, above, text width=16mm]{label + confidence} (s3-rep.north east);
 \draw[fwd] (s3-gate2) -- node[lbl, pos=0.5, above, text width=13mm]{descriptors, gated} (s3-rep.west);
 \draw[fwd] (s3-rep) -- (s3-sum);
 

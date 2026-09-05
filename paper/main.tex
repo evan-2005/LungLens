@@ -75,7 +75,14 @@ We turn that question into a measurement. Reusing the region-level statistics th
 \label{sec:distillation}
 A second network, a U-Net-style encoder-decoder (\texttt{MultiTaskUNet}: four \texttt{DoubleConv} blocks, $64\to128\to256\to512$ channels, skip connections, 7{,}705{,}224 parameters, counted from the served checkpoint), learns to reproduce the classifier's Grad-CAM map in one forward pass, avoiding the backward pass Grad-CAM needs. The frozen DenseNet (no gradient enters it here) produces a Grad-CAM map at \texttt{denseblock4.denselayer16.conv2} for each image's \emph{ground-truth} label, ReLU'd, resized to $224\times224$, and divided by its own maximum; targets are held in memory for the run and never cached to disk. The U-Net is trained against that target with an unweighted Dice+BCE loss (Adam, $3\times10^{-4}$, batch 8) over 3{,}000 images for 20 epochs; the served channel is the class being visualised.
 
-We call this \emph{explanation amortisation}, not knowledge distillation. Nothing is shared between the two networks: no layers, no logit or feature matching, no gradient path from student to teacher. The only channel is one $224\times224$ per-class scalar field, computed once and discarded. Very little survives a channel that narrow, and the cost is measurable: on the 245 served films, the median Dice between the U-Net's mask and a fresh live Grad-CAM map for the same film and class is 0.22, with 27\% showing no overlap and 15\% above 0.5. What the compression buys is a real serving-cost saving (Section~\ref{sec:results}); stating that saving together with this cost is the honest description.
+We call this \emph{explanation amortisation}, not knowledge distillation. Nothing is shared between the two networks: no layers, no logit or feature matching, no gradient path from student to teacher. The only channel is one $224\times224$ per-class scalar field, computed once and discarded. Very little survives a channel that narrow, and the cost is measurable: on the 245 served films, the median Dice between the U-Net's mask and a fresh live Grad-CAM map for the same film and class is 0.22, with 27\% showing no overlap and 15\% above 0.5 (Figure~\ref{fig:dicehist}). What the compression buys is a real serving-cost saving (Section~\ref{sec:results}); stating that saving together with this cost is the honest description.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.5\linewidth]{figures/fig_dice_hist.pdf}
+  \caption{Dice between the served U-Net mask and a freshly computed live Grad-CAM map, same film and class, over all 245 served films. The distribution is heavy at zero, not merely low on average: a generator that reads a location from one of these two sources cannot assume the other agrees with it.}
+  \label{fig:dicehist}
+\end{figure}
 
 \subsection{Report generation}
 \label{sec:reportgen}
@@ -238,6 +245,13 @@ The dominant error is one-directional: 102 pneumonia radiographs predicted Norma
 
 \textbf{Source-bias probe.} An earlier composite drew three of four classes from one source each, so a model could score by recognising the scanner rather than the pathology \citep{zech2018variable}. The composite here weakens that: tuberculosis, Covid-19, and pneumonia each draw from at least two sources, though the COVID-19 Radiography Database still supplies three classes through one pipeline. Per-source accuracy spans 83.33\% (Montgomery, 12 images) to 99.50\% (TBX11K), wider than prevalence alone explains, though the two extremes are also the two smallest partitions, so sampling noise and genuine source sensitivity cannot be separated here. The 96.18\% headline is read as inflated by acquisition cues to an unknown degree.
 
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.62\linewidth]{figures/fig_persource.pdf}
+  \caption{Test accuracy by source dataset, sorted, with support ($n$) per source and the overall figure marked. The two weakest sources are also the two smallest partitions (92 and 12 images), so this narrows the source-cue confound without settling it.}
+  \label{fig:persource}
+\end{figure}
+
 \section{Report-generation templates, verbatim}
 \label{app:templates}
 
@@ -288,6 +302,13 @@ if mask is not None:
 
 Films from the 245-film pool, S0/S1 text verbatim from \texttt{tier1\_summaries.csv}.
 
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig_qualitative.png}
+  \caption{Six served overlays, input above overlay, spanning the range Appendix~\ref{app:qualitative} quantifies. Left (green): compact regions that settle inside the lung field and follow the visible opacity, 66--90\% of the region inside the lung. Right (red): a correct tuberculosis call whose evidence sits almost entirely in soft tissue at the apex (97\% outside the lung); a region covering 86\% of the image, spanning both lungs and the chest wall; and a clear, well-aerated film the model calls Normal, where no region survives the display threshold at all. All six overlays came from the served U-Net path. Per-case labels give the true class, the prediction, its confidence, and what the region did; italics are this appendix's reading, not part of the served text.}
+  \label{fig:qualitative}
+\end{figure}
+
 \textbf{Phantom-outline claims} (both films where \texttt{is\_confident\_finding} is true but no region survives the threshold; both Montgomery TB group).
 \begin{itemize}
 \item \texttt{194\_MCUCXR\_0015\_0}: true Normal, predicted Tuberculosis at 95.7\%. S0: ``\dots The outline marks the most influential area. Overlay source: disease-segmentation U-Net.'' No region exists in the image. S1 under H\_actual: ``\dots No heatmap region met the reporting threshold; no location is reported.'' A confidently wrong call compounded by a claim about an outline that was never drawn.
@@ -312,6 +333,33 @@ Same 245-film pool. 41 (16.7\%) produce no region above the overlay threshold; g
 \end{itemize}
 
 On the 102 pneumonia-to-Normal errors, 28 produce no region and none produces a region over half the image; median region area is 11\%, against 41\% for correctly classified pneumonia. This is consistent with the label-noise reading: the lung fields are frequently clear and the small regions the model does produce plausibly agree with unremarkable pixels.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig_descriptors.pdf}
+  \caption{The two region descriptors added for this evaluation (Section~\ref{sec:design}), over all 245 films. Two thirds of regions centre in the mid zone; most of the rest produce no region at all, rather than an upper- or lower-zone one. Single- and multi-component regions are close to a coin flip, which is why focality is reported as its own descriptor rather than folded into extent.}
+  \label{fig:descriptors}
+\end{figure}
+
+\section{Latency, per stage}
+\label{app:latency}
+
+Table~\ref{tab:latency} splits the mean CPU wall-clock time reported in Section~\ref{sec:results} by which localisation path served the request (i7-13620H, 10 PyTorch threads, single request). The two rows are two different code paths, not one path with variance: the served U-Net returns a mask in one forward pass; the live Grad-CAM fallback needs a forward pass and a backward pass through the classifier. Report generation is a dictionary lookup and does not appear as a separate row because it does not register above measurement noise.
+
+\begin{table}[h]
+\centering
+\caption{CPU latency by localisation path, i7-13620H, 10 threads, single request.}
+\label{tab:latency}
+\begin{tabular}{lccc}
+\toprule
+Path & Share of test films & Mean (sd), ms \\
+\midrule
+Distilled U-Net (one forward pass) & 91\% & 293 (81) \\
+Live Grad-CAM fallback (forward + backward) & 9\% & 560 (22) \\
+Weighted (actual test-set mix) & 100\% & 318 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \newpage
 \input{checklist.tex}
