@@ -39,8 +39,14 @@ def net():
     global _net
     if _net is None:
         _net = UNet()
-        _net.load_state_dict(torch.load(os.path.join(HERE, "lungfield_unet.pth"),
-                                        map_location=device, weights_only=True))
+        # Overridable so a cloud machine can load weights fetched from storage;
+        # the .pth is gitignored and absent from a fresh clone.
+        weights = os.environ.get("LUNGFIELD_WEIGHTS", os.path.join(HERE, "lungfield_unet.pth"))
+        if not os.path.exists(weights):
+            raise FileNotFoundError(
+                f"Lung-field weights not found at {weights}. Copy lungfield_unet.pth "
+                "there or set LUNGFIELD_WEIGHTS.")
+        _net.load_state_dict(torch.load(weights, map_location=device, weights_only=True))
         _net.to(device).eval()
     return _net
 

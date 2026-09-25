@@ -1,0 +1,8 @@
+{
+  "fingerprint": "7d3496d3c93e31af4237ffdb0572e192d6a74d86227c71347c8da45da8f31519",
+  "counts": {
+    "train": 22419,
+    "val": 4822,
+    "test": 4759
+  }
+}
