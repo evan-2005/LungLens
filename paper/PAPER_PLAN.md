@@ -267,14 +267,14 @@ The current 96.18% is inflated by source cues, so the goal is not a higher numbe
 | --- | --- | --- | --- | --- | --- |
 | E1 | **Lung-constrained attention training** | 55% of served heatmaps sit mostly outside the lungs | New heatmap condition (H7) and a new classifier row | 1 GPU run per setting | **Prototype built** (`lung_attention/`); runs on AWS via `lung_attention/aws/` |
 | E2 | **Shared-layer localiser** (decoder on frozen DenseNet features) | U-Net vs Grad-CAM median Dice 0.22; no shared layers (comment 4) | Replaces the amortised U-Net (H3') | New head + 1 localiser run | planned |
-| E3 | **Leave-one-source-out (LOSO) evaluation** | Per-source accuracy 83.3% to 99.5%; source bias | External-validation table; judge E1/E5 on it | ~8 short runs | planned |
-| E4 | **Self-verifying summary** (LLM/VLM + grounding checker + UI badge) | Summary never reads the mask (comment 1) | Generators S2 to S4, Section 5 of this plan | see Section 5 | planned |
+| E3 | **Leave-one-source-out (LOSO) evaluation** | Per-source accuracy 83.3% to 99.5%; source bias | External-validation table; judge E1/E5 on it | ~8 short runs | **Built** (`--holdout-source`, `aws/run_loso.sh`); needs GPU runs |
+| E4 | **Self-verifying summary** (LLM/VLM + grounding checker + UI badge) | Summary never reads the mask (comment 1) | Generators S2 to S4, Section 5 of this plan | see Section 5 | **Harness built** (`report_eval/`); S0/S1 full run, S2 piloted; S3/S4 need a vision model |
 | E5 | **Explanation consensus** (claim a location only where H1/H2/H3/H4 agree) | Heatmap methods disagree | Extra gated generator S1c; agreement map in the UI | small, after H1 to H4 exist | planned |
 | E6 | **Similar-case retrieval** (nearest labelled training films in DenseNet embedding space) | Only one kind of explanation shown | App feature; appendix figure | small | optional |
-| E7 | **Non-CXR input rejection** (out-of-distribution check) | App labels any image with high confidence | App safety feature; one appendix line | small | optional |
-| T3a | **Label fix:** `Lung_Opacity` as its own class or dropped from Pneumonia | 82 of 102 pneumonia-as-Normal errors come from this folder | Classifier row; changes all classification numbers | 1 run | optional |
+| E7 | **Non-CXR input rejection** (out-of-distribution check) | App labels any image with high confidence | App safety feature; one appendix line | small | **Done** (`input_check.py`): 0 of 565 real X-rays rejected, 0 of 82 non-X-rays accepted |
+| T3a | **Label fix:** `Lung_Opacity` as its own class or dropped from Pneumonia | 82 of 102 pneumonia-as-Normal errors come from this folder | Classifier row; changes all classification numbers | 1 run | **Option built** (`--drop-lung-opacity`); needs a GPU run |
 | T3b | **Source-adversarial head** (gradient reversal on the source label) | Source cues | Pairs with E1; judge on LOSO | 1 run per setting | optional |
-| T3c | **Calibration + pneumonia-sensitive threshold + TTA** | Pneumonia recall 92.2% | App improvement; not a paper claim | small | optional |
+| T3c | **Calibration + pneumonia-sensitive threshold + TTA** | Pneumonia recall 92.2% | App improvement; not a paper claim | small | **Done** (`decision.py`, `calibration/`): test pneumonia recall 92.2% to 95.3%, ECE 2.6% to 0.6% |
 
 Recommended core for the paper: **E1 + E2 + E4, all evaluated with E3.** That gives one chain: better heatmaps lead to more grounded summaries and better cross-source accuracy.
 

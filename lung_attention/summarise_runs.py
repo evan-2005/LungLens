@@ -67,7 +67,8 @@ def main(argv=None):
     named = []
     for path in found:
         with open(path, encoding="utf-8") as fh:
-            named.append((os.path.basename(os.path.dirname(path)), json.load(fh)))
+            named.append((os.path.relpath(os.path.dirname(path), args.runs).replace(os.sep, "/"),
+                      json.load(fh)))
     md = (f"# E1 results ({args.split} split)\n\n"
           "GT-lung columns use the Radiography Database's own lung masks (independent of training); "
           "Pred-lung columns use the lung U-Net that also supervises E1, so they flatter E1.\n\n"

@@ -19,7 +19,15 @@ from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from sklearn.metrics import (classification_report, f1_score, recall_score,
                              confusion_matrix)
 import re
+import sys
 import threading
+
+from decision import CONFIG_PATH, NORMAL_IDX, PNEUMONIA_IDX, decide, load_config_for
+from grounded_report import MODE_LABELS, build_report
+from input_check import check_upload
+from report_eval.descriptors import from_region
+from report_eval.llm_backends import OllamaBackend
+from report_eval.templates import Prediction
 
 CLASSES = ["Normal", "Pneumonia", "Tuberculosis", "Covid-19"]
 NUM_CLASSES = len(CLASSES)
@@ -1497,8 +1505,86 @@ def outline_region(img, region):
     return img
 
 
+# Lung fields: used to reject non-X-ray uploads and to decide whether a heatmap
+# region lies in the lungs before the summary may name a location. The weights
+# are gitignored; without them the app still runs but never claims a location.
+_LUNG_SEG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fig7_work")
+_lung_seg_available = None
+
+
+def lung_fields(pil_cropped, shape):
+    """(lung, anatomical_right, anatomical_left) masks at `shape`, or three Nones."""
+    global _lung_seg_available
+    if _lung_seg_available is False:
+        return None, None, None
+    try:
+        if _LUNG_SEG_DIR not in sys.path:
+            sys.path.insert(0, _LUNG_SEG_DIR)
+        import lungfield
+        lung = lungfield.lung_mask(pil_cropped, shape)
+        image_left, image_right = lungfield.split_lungs(lung)
+    except FileNotFoundError as e:
+        _lung_seg_available = False
+        print(f"Lung-field segmenter unavailable, location claims disabled: {e}")
+        return None, None, None
+    _lung_seg_available = True
+    # On a frontal film the patient's right lung appears on the image's left.
+    return lung, image_left, image_right
+
+
+def summary_backend():
+    """Local LLM for the optional 'Local LLM wording' summary, if configured.
+
+    Set LUNGLENS_LLM_MODEL to an Ollama model name to enable it. Only the
+    prediction and the region descriptors are sent, never the image, and only
+    to the local Ollama server.
+    """
+    model = os.environ.get("LUNGLENS_LLM_MODEL")
+    if not model:
+        return None
+    return OllamaBackend(model, host=os.environ.get("LUNGLENS_OLLAMA_HOST",
+                                                    "http://localhost:11434"), timeout=60)
+
+
+DEFAULT_SUMMARY_MODE = next(iter(MODE_LABELS))
+DISPLAY_MAX_SIDE = 1024
+_decision_cache = {}
+
+
+def decision_config():
+    """Calibration + pneumonia screening threshold for the served checkpoint.
+
+    Re-read when the checkpoint file changes (e.g. after retraining). Applied
+    only if decision_config.json was fitted for this exact checkpoint.
+    """
+    key = (os.path.abspath(model_path),
+           os.path.getmtime(model_path) if os.path.exists(model_path) else None)
+    if key not in _decision_cache:
+        # Next to the checkpoint first, then the app folder; the hash check in
+        # load_config_for means only a config fitted for this file can apply.
+        candidates = [os.path.join(os.path.dirname(os.path.abspath(model_path)), CONFIG_PATH),
+                      os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_PATH)]
+        for path in dict.fromkeys(candidates):
+            cfg, reason = load_config_for(model_path, path)
+            if reason.startswith("applied"):
+                break
+        print(f"Decision config: {reason}")
+        _decision_cache.clear()
+        _decision_cache[key] = cfg
+    return _decision_cache[key]
+
+
+def _cap_size(img, max_side):
+    """A copy whose longer side is at most `max_side` (the original if already small)."""
+    w, h = img.size
+    scale = max_side / float(max(w, h))
+    if scale >= 1.0:
+        return img
+    return img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.BILINEAR)
+
+
 # Inference
-def predict_image(image, target_class_name):
+def predict_image(image, target_class_name, summary_mode=DEFAULT_SUMMARY_MODE):
     global seg_model, cls_model
 
     if seg_model is None and cls_model is None:
@@ -1535,6 +1621,17 @@ def predict_image(image, target_class_name):
     # sees the same framing the model was trained on. Crop the PIL image here
     # (not inside tf) so the displayed image and heatmap overlay align with it.
     image = BorderCrop()(image)
+    # Heatmap blending, region cleaning and lung analysis run on a copy capped
+    # at DISPLAY_MAX_SIDE: uploads reach 4000 px, the result panel shows ~340 px,
+    # and full-resolution image work dominated latency. The classifier still
+    # reads `image`, so predictions are unchanged.
+    display_img = _cap_size(image, DISPLAY_MAX_SIDE)
+
+    lung, lung_right, lung_left = lung_fields(display_img, np.array(display_img).shape)
+    upload = check_upload(display_img, lung)
+    if not upload.ok:
+        gr.Warning(upload.reason)
+        return f"**Not analysed.** {upload.reason}", {}, gr.update(value=None)
 
     try:
         tf = transforms.Compose([
@@ -1542,7 +1639,7 @@ def predict_image(image, target_class_name):
             transforms.ToTensor(),
             _normalize_transform()])
 
-        orig_np = np.array(image)
+        orig_np = np.array(display_img)
 
         # Classification comes from the DenseNet when available (the U-Net
         # head is only a fallback); masks come from the U-Net when available.
@@ -1558,7 +1655,9 @@ def predict_image(image, target_class_name):
                 cls_logits = cls_model(t)
             else:
                 cls_logits = seg_logits
-            probabilities = torch.softmax(cls_logits, 1)[0].cpu()
+            cfg = decision_config()
+            probs_np, decided_idx = decide(cls_logits[0].float().cpu().numpy(), cfg)
+            probabilities = torch.from_numpy(probs_np).float()
 
         if probabilities.shape[0] != len(CLASSES):
             raise RuntimeError(f"Probability shape mismatch: {probabilities.shape[0]} vs {len(CLASSES)}")
@@ -1632,6 +1731,7 @@ def predict_image(image, target_class_name):
 
         superimposed = orig_np
         has_region = False
+        region = None
         if mask is not None:
             # One floored map feeds both the blend and the outline, so the two
             # can no longer disagree about where the region is.
@@ -1643,43 +1743,29 @@ def predict_image(image, target_class_name):
                     superimposed = outline_region(superimposed, region)
                     has_region = True
 
-        descriptions = {
-            "Normal":       "No abnormal opacities detected in the lung fields.",
-            "Pneumonia":    "Findings consistent with pneumonia. Warmer areas indicate possible consolidation.",
-            "Tuberculosis": "Findings consistent with tuberculosis. Warmer areas indicate possible focal lesions or cavitation.",
-            "Covid-19":     "Findings consistent with Covid-19. Warmer areas indicate possible bilateral ground-glass opacities.",
-        }
-
-        if is_uncertain:
-            txt = (f"**Prediction:** Uncertain\n\n"
-                   f"The top class is {top_cls} at {top_prob * 100:.1f}%, below the "
-                   f"{CONFIDENCE_THRESHOLD * 100:.0f}% reporting threshold. Review the class "
-                   f"confidence values; a repeat or higher quality image may help.")
-        else:
-            txt = (f"**Prediction:** {top_cls} ({top_prob * 100:.1f}% confidence)\n\n"
-                   f"{descriptions[top_cls]}")
-
-        # Explain what the heatmap represents for this specific case.
-        if mask is None:
-            txt += "\n\nNo attention map is available for this model."
-        elif is_confident_finding:
-            txt += (f"\n\nHeatmap: region driving the {viz_cls} prediction. "
-                    f"The outline marks the most influential area.")
-        elif is_auto and top_idx == 0:
-            txt += (f"\n\nHeatmap: areas the model assessed for {viz_cls} "
-                    f"(the next most likely class); none reached an abnormal level.")
-        elif is_uncertain:
-            txt += (f"\n\nHeatmap: areas the model weighed for {viz_cls}. "
-                    f"Interpret with caution while the prediction is uncertain.")
-        else:
-            txt += f"\n\nHeatmap: model attention for {viz_cls} ({viz_prob * 100:.1f}%)."
-
-        if mask is not None:
-            txt += ("\n\n_Overlay source: disease-segmentation U-Net._"
-                    if mask_source == "segmentation"
-                    else "\n\n_Overlay source: Grad-CAM._")
-
-        return txt, prob_dict, gr.update(value=Image.fromarray(superimposed))
+        # The summary reads the region it describes: a location is named only
+        # for a confident finding whose outlined region lies mostly in the
+        # lungs (grounded_report.py). The old class-keyed template never read
+        # the heatmap at all; it is kept as the "Original template" option.
+        prediction = Prediction(top_cls=top_cls, top_prob=top_prob, probs=prob_dict,
+                                mask_source=mask_source or "")
+        descriptors = from_region(region, lung_right, lung_left) if has_region else None
+        report = build_report(prediction, descriptors, region_drawn=has_region,
+                              mode=MODE_LABELS.get(summary_mode, "grounded"),
+                              backend=summary_backend(),
+                              visualised_cls=None if is_auto else viz_cls)
+        notes = []
+        if upload.warning:
+            notes.append(f"> **Image check:** {upload.warning}")
+        # The screening threshold never relabels the film: Normal stays the top
+        # class, and the pneumonia probability is flagged for review instead.
+        if top_idx == NORMAL_IDX and decided_idx == PNEUMONIA_IDX:
+            notes.append(f"> **Pneumonia screening flag:** pneumonia probability "
+                         f"{prob_dict['Pneumonia'] * 100:.1f}% is above the screening threshold "
+                         f"({cfg.pneumonia_threshold * 100:.0f}%), although Normal is the most "
+                         f"likely class. Consider clinical review.")
+        text = "\n\n".join(notes + [report.text])
+        return text, prob_dict, gr.update(value=Image.fromarray(superimposed))
 
     except Exception as e:
         gr.Warning(f"Diagnosis failed: {e}")
@@ -2006,6 +2092,8 @@ with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
                 input_img = gr.Image(type="pil", label="", elem_classes="upload-zone", height=340)
                 target_viz = gr.Dropdown(choices=[AUTO_OVERLAY] + CLASSES, value=AUTO_OVERLAY,
                                          label="Overlay class")
+                summary_mode = gr.Dropdown(choices=list(MODE_LABELS), value=DEFAULT_SUMMARY_MODE,
+                                           label="Summary")
                 gr.HTML("<p class='disclaimer-note'>The heatmap shows where the model focused "
                         "for the predicted class, or a specific class if one is selected. "
                         "For research use only; not a substitute for professional "
@@ -2021,7 +2109,7 @@ with gr.Blocks(title="LungLens", fill_width=True, theme=ll_theme) as demo:
                                         elem_classes="conf-label")
                 output_markdown = gr.Markdown()
 
-        predict_btn.click(fn=predict_image, inputs=[input_img, target_viz],
+        predict_btn.click(fn=predict_image, inputs=[input_img, target_viz, summary_mode],
                           outputs=[output_markdown, output_label, output_heatmap])
         reset_btn.click(fn=reset_view, inputs=[],
                         outputs=[input_img, output_heatmap, output_markdown, output_label])

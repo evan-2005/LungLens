@@ -43,7 +43,7 @@ from lung_attention.attention_loss import (  # noqa: E402
     lung_masks_from_batch,
     outside_lung_fraction,
 )
-from lung_attention.split_manifest import load_split  # noqa: E402
+from lung_attention.split_manifest import apply_split_options, load_split  # noqa: E402
 
 CHECKPOINT_NAME = "classifier.pth"
 METRICS_NAME = "train_metrics.json"
@@ -54,6 +54,10 @@ def parse_args(argv=None):
     p.add_argument("--split-manifest", default=None,
                    help="frozen split CSV (required for results comparable to the paper "
                         "on any machine other than the one that exported it)")
+    p.add_argument("--drop-lung-opacity", action="store_true",
+                   help="#7: remove the Radiography DB Lung_Opacity folder from all splits")
+    p.add_argument("--holdout-source", default=None,
+                   help="#9: leave this source out of train/val and test on all of it")
     p.add_argument("--samples", type=int, default=32000,
                    help="subsample size when re-deriving the split without a manifest")
     p.add_argument("--epochs", type=int, default=40)
@@ -79,7 +83,7 @@ def parse_args(argv=None):
     return args
 
 
-def get_split(manifest, samples):
+def get_split(manifest, samples, drop_lung_opacity=False, holdout_source=None):
     """
     {train, val, test} -> (paths, labels, sources).
 
@@ -88,7 +92,7 @@ def get_split(manifest, samples):
     on the machine that produced it (see split_manifest.py).
     """
     if manifest:
-        return load_split(manifest)
+        return apply_split_options(load_split(manifest), drop_lung_opacity, holdout_source)
     print("[lungattn] WARNING: no --split-manifest; re-deriving the split, which "
           "differs across operating systems.", flush=True)
     paths, labels, groups, sources = app.collect_dataset()
@@ -97,12 +101,14 @@ def get_split(manifest, samples):
     paths, labels, groups, sources = app.stratified_subsample(
         paths, labels, groups, sources, samples)
     tr, va, te = app.patient_grouped_split(paths, labels, groups, sources)
-    return {"train": tr, "val": va, "test": te}
+    return apply_split_options({"train": tr, "val": va, "test": te},
+                               drop_lung_opacity, holdout_source)
 
 
 def build_loaders(args):
     """The app's own data pipeline and transforms, on the paper's split."""
-    split = get_split(args.split_manifest, args.samples)
+    split = get_split(args.split_manifest, args.samples,
+                      args.drop_lung_opacity, args.holdout_source)
     (tr_p, tr_l, _), (va_p, va_l, _), (te_p, _, _) = split["train"], split["val"], split["test"]
     train_tf, eval_tf = app.build_transforms()
     kw = dict(num_workers=args.workers, pin_memory=(app.device.type == "cuda"))

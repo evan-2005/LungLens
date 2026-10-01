@@ -1,0 +1,64 @@
+{
+  "temperature": 1.9500000000000002,
+  "pneumonia_threshold": 0.16,
+  "checkpoint_sha256": "b7785e69d32f427d5107a46ea1bf749b3137136633cb448523fdb459fb3dd6fc",
+  "report": {
+    "fitted_on": "validation split",
+    "n_val": 4822,
+    "selection_rule": "lowest threshold keeping macro-F1 within 0.5 and Normal recall within 2.0 points of argmax",
+    "val_ece_before": 0.02416928995952325,
+    "val_ece_after": 0.004182692806902672,
+    "val_argmax": {
+      "accuracy": 96.2671090833679,
+      "macro_f1": 96.02139105120028,
+      "recall": {
+        "Normal": 98.2033483054308,
+        "Pneumonia": 92.9326287978864,
+        "Tuberculosis": 95.4356846473029,
+        "Covid-19": 97.0873786407767
+      },
+      "pneumonia_as_normal": 97,
+      "normal_as_pneumonia": 22
+    },
+    "val_with_threshold": {
+      "threshold": 0.16,
+      "ok": true,
+      "accuracy": 96.3500622148486,
+      "macro_f1": 96.09488944313053,
+      "recall": {
+        "Normal": 96.24336463862801,
+        "Pneumonia": 96.3672391017173,
+        "Tuberculosis": 95.4356846473029,
+        "Covid-19": 97.0873786407767
+      },
+      "pneumonia_as_normal": 45,
+      "normal_as_pneumonia": 70
+    },
+    "test_argmax": {
+      "accuracy": 96.17566715696574,
+      "macro_f1": 95.77090374130893,
+      "recall": {
+        "Normal": 98.52118305355717,
+        "Pneumonia": 92.2192151556157,
+        "Tuberculosis": 95.06172839506173,
+        "Covid-19": 96.64179104477611
+      },
+      "pneumonia_as_normal": 102,
+      "normal_as_pneumonia": 14
+    },
+    "test_with_threshold": {
+      "accuracy": 96.21769279260349,
+      "macro_f1": 95.81700678762186,
+      "recall": {
+        "Normal": 96.80255795363709,
+        "Pneumonia": 95.2638700947226,
+        "Tuberculosis": 95.06172839506173,
+        "Covid-19": 96.64179104477611
+      },
+      "pneumonia_as_normal": 57,
+      "normal_as_pneumonia": 57
+    },
+    "test_ece_before": 0.025935619146107775,
+    "test_ece_after": 0.005745857072741882
+  }
+}

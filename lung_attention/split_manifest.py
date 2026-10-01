@@ -113,6 +113,42 @@ def load_split(path, roots=None):
     return out
 
 
+def _is_lung_opacity(path):
+    return "Lung_Opacity" in os.path.normpath(path).split(os.sep)
+
+
+def apply_split_options(split, drop_lung_opacity=False, holdout_source=None):
+    """
+    Variants of a frozen split, returned as new dicts (the input is not changed).
+
+    drop_lung_opacity (#7): remove the Radiography Database's Lung_Opacity
+        folder from every partition. 82 of the 102 pneumonia-as-Normal test
+        errors come from it, and "lung opacity" is a broader finding than
+        pneumonia. Compare models only on the same filtered test set.
+    holdout_source (#9): leave-one-source-out. Train and validate on every
+        other source; test on ALL images of the held-out source, from all
+        three partitions, so the model never saw that acquisition pipeline.
+    """
+    def keep(name, pred):
+        paths, labels, sources = split[name]
+        rows = [(p, l, s) for p, l, s in zip(paths, labels, sources) if pred(p, s)]
+        return tuple(list(col) for col in zip(*rows)) if rows else ([], [], [])
+
+    out = dict(split)
+    if drop_lung_opacity:
+        out = {name: keep(name, lambda p, s: not _is_lung_opacity(p)) for name in SPLITS}
+        split = out
+    if holdout_source:
+        all_sources = {s for name in SPLITS for s in split[name][2]}
+        if holdout_source not in all_sources:
+            raise ValueError(f"unknown source {holdout_source!r}; have {sorted(all_sources)}")
+        held = [keep(name, lambda p, s: s == holdout_source) for name in SPLITS]
+        out = {"train": keep("train", lambda p, s: s != holdout_source),
+               "val": keep("val", lambda p, s: s != holdout_source),
+               "test": tuple(sum((list(h[i]) for h in held), []) for i in range(3))}
+    return out
+
+
 def export(out, samples, seed=42):
     import app
     paths, labels, groups, sources = app.collect_dataset()

@@ -48,14 +48,18 @@ def parse_args(argv=None):
     p.add_argument("--split", choices=["val", "test"], default="val")
     p.add_argument("--split-manifest", default=None,
                    help="frozen split CSV; see split_manifest.py")
+    p.add_argument("--drop-lung-opacity", action="store_true",
+                   help="#7: remove the Radiography DB Lung_Opacity folder from all splits")
+    p.add_argument("--holdout-source", default=None,
+                   help="#9: leave this source out of train/val and test on all of it")
     p.add_argument("--samples", type=int, default=32000)
     p.add_argument("--max-images", type=int, default=0, help="0 = whole split")
     p.add_argument("--out", required=True)
     return p.parse_args(argv)
 
 
-def split_records(split, samples, manifest):
-    return get_split(manifest, samples)[split]
+def split_records(split, samples, manifest, drop_lung_opacity=False, holdout_source=None):
+    return get_split(manifest, samples, drop_lung_opacity, holdout_source)[split]
 
 
 def gt_lung_mask(path):
@@ -138,7 +142,8 @@ def summarise(rows, labels, sources):
 
 def main(argv=None):
     args = parse_args(argv)
-    paths, labels, sources = split_records(args.split, args.samples, args.split_manifest)
+    paths, labels, sources = split_records(args.split, args.samples, args.split_manifest,
+                                            args.drop_lung_opacity, args.holdout_source)
     if args.max_images:
         paths, labels, sources = (paths[:args.max_images], labels[:args.max_images],
                                   sources[:args.max_images])
@@ -155,6 +160,7 @@ def main(argv=None):
 
     result = {"ckpt": args.ckpt, "split": args.split, "samples": args.samples,
               "split_manifest": args.split_manifest,
+              "drop_lung_opacity": args.drop_lung_opacity, "holdout_source": args.holdout_source,
               **summarise(rows, labels, sources)}
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:

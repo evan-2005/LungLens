@@ -64,5 +64,38 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(back[0]["label"], 0)
 
 
+class SplitOptionsTest(unittest.TestCase):
+    def setUp(self):
+        from lung_attention.split_manifest import apply_split_options
+        self.apply = apply_split_options
+        p = lambda *parts: os.path.join("r", *parts)  # noqa: E731
+        self.split = {
+            "train": ([p("Lung_Opacity", "images", "a.png"), p("Normal", "images", "b.png"),
+                       p("sz", "c.png")], [1, 0, 2], ["radiography_db", "radiography_db", "shenzhen_tb"]),
+            "val": ([p("sz", "d.png")], [0], ["shenzhen_tb"]),
+            "test": ([p("Lung_Opacity", "images", "e.png"), p("tb", "f.png")], [1, 2],
+                     ["radiography_db", "tb_ds"]),
+        }
+
+    def test_no_options_returns_split_unchanged(self):
+        self.assertEqual(self.apply(self.split), self.split)
+
+    def test_drop_lung_opacity_removes_it_everywhere(self):
+        out = self.apply(self.split, drop_lung_opacity=True)
+        for paths, _, _ in out.values():
+            self.assertFalse(any("Lung_Opacity" in x for x in paths))
+        self.assertEqual(len(out["train"][0]), 2)
+        self.assertEqual(len(out["test"][0]), 1)
+
+    def test_holdout_source_tests_on_all_of_it_and_trains_on_none(self):
+        out = self.apply(self.split, holdout_source="shenzhen_tb")
+        self.assertEqual(sorted(out["test"][2]), ["shenzhen_tb", "shenzhen_tb"])
+        self.assertNotIn("shenzhen_tb", out["train"][2] + out["val"][2])
+
+    def test_unknown_holdout_source_fails_loudly(self):
+        with self.assertRaises(ValueError):
+            self.apply(self.split, holdout_source="nope")
+
+
 if __name__ == "__main__":
     unittest.main()
