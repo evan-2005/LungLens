@@ -65,6 +65,22 @@ S4_PROMPT = ("The classifier predicts {cls} ({prob:.1f}%). The first image is th
              "prediction located?")
 VLM_MAX_TOKENS = 200
 
+# S4i: the same question, but the model reports sides as they appear on the
+# IMAGE and the code converts them. Tests whether S4's wrong sides come from
+# the model reading the overlay or from the left/right convention.
+VLM_IMAGE_SIDE_SYSTEM = (
+    "You assist with a research study on chest X-ray decision-support software. "
+    "Answer in one or two short sentences. Describe positions as they appear on the image "
+    "as displayed: say 'left of the image' or 'right of the image', not the patient's side. "
+    "If you cannot see an abnormality supporting the prediction, say so instead of guessing "
+    "a location. This is not a clinical report."
+)
+S4I_PROMPT = ("The classifier predicts {cls} ({prob:.1f}%). The first image is the radiograph. "
+              "The second image overlays the classifier's heatmap: warmer colours mark the region "
+              "that drove the prediction. Where on the image is the highlighted region? Use the "
+              "image's left and right as displayed.")
+_TO_PATIENT_SIDE = {"right lung": "left lung", "left lung": "right lung"}
+
 
 @dataclass(frozen=True)
 class GeneratedReport:
@@ -127,11 +143,25 @@ def s2_llm(prediction, descriptors, backend):
                            reject_reason="; ".join(problems), sentence=sentence)
 
 
-def _vlm(prompt, images, backend):
-    result = backend.generate(VLM_SYSTEM, prompt, images=images, max_tokens=VLM_MAX_TOKENS)
+def image_side_claim(text):
+    """Parse a claim stated in image coordinates and convert it to the patient's side."""
+    claim = parse_claim(text)
+    if claim is None or claim.side not in _TO_PATIENT_SIDE:
+        return claim
+    return Claim(_TO_PATIENT_SIDE[claim.side], claim.zone, claim.extent)
+
+
+def _vlm(prompt, images, backend, system=VLM_SYSTEM, parse=parse_claim):
+    result = backend.generate(system, prompt, images=images, max_tokens=VLM_MAX_TOKENS)
     text = result.text.strip()
-    return GeneratedReport(text=text, claim=parse_claim(text), model=result.model,
+    return GeneratedReport(text=text, claim=parse(text), model=result.model,
                            latency_s=result.latency_s, raw=result.text)
+
+
+def s4i_vlm(prediction, radiograph_png, overlay_png, backend):
+    prompt = S4I_PROMPT.format(cls=prediction.top_cls, prob=prediction.top_prob * 100)
+    return _vlm(prompt, [radiograph_png, overlay_png], backend,
+                system=VLM_IMAGE_SIDE_SYSTEM, parse=image_side_claim)
 
 
 def s3_vlm(prediction, radiograph_png, backend):
@@ -144,4 +174,5 @@ def s4_vlm(prediction, radiograph_png, overlay_png, backend):
     return _vlm(prompt, [radiograph_png, overlay_png], backend)
 
 
-__all__ = ["BackendError", "GeneratedReport", "s2_llm", "s3_vlm", "s4_vlm"]
+__all__ = ["BackendError", "GeneratedReport", "image_side_claim", "s2_llm", "s3_vlm", "s4_vlm",
+           "s4i_vlm"]

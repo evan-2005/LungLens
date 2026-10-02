@@ -10,6 +10,7 @@ Generators
   s2 constrained text LLM                         (needs --backend)
   s3 VLM, radiograph only                         (runs under "none" only)
   s4 VLM, radiograph + overlay                    (runs under "actual" and "permuted")
+  s4i as s4, but sides asked in image coordinates and converted by the code
 
 Every output is appended to a JSONL file as soon as it exists, and finished
 (generator, condition, film) triples are skipped on re-run, so an interrupted
@@ -32,16 +33,18 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from report_eval.claims import claim_from_descriptors, parse_claim  # noqa: E402
+from report_eval.claims import claim_from_descriptors, parse_claim, response_kind  # noqa: E402
 from report_eval.films import derangement, load_films  # noqa: E402
 from report_eval.llm_backends import BackendError, ClaudeBackend, OllamaBackend  # noqa: E402
+from report_eval.llm_generators import image_side_claim  # noqa: E402
 from report_eval.score import score_output, summarise  # noqa: E402
 from report_eval.templates import s0_template, s1_descriptor  # noqa: E402
 
 CONDITIONS = ("actual", "none", "permuted")
 GENERATOR_CONDITIONS = {"s0": CONDITIONS, "s1": CONDITIONS, "s2": CONDITIONS,
-                        "s3": ("none",), "s4": ("actual", "permuted")}
-MODEL_GENERATORS = {"s2", "s3", "s4"}
+                        "s3": ("none",), "s4": ("actual", "permuted"),
+                        "s4i": ("actual", "permuted")}
+MODEL_GENERATORS = {"s2", "s3", "s4", "s4i"}
 H5_SEEDS = 1000
 
 
@@ -106,14 +109,17 @@ def generate(gen, film, source, backend):
         return text, parse_claim(text), {}
     if gen == "s1":
         return s1_descriptor(pred, d), claim_from_descriptors(d), {}
-    from report_eval.llm_generators import s2_llm, s3_vlm, s4_vlm
+    from report_eval.llm_generators import s2_llm, s3_vlm, s4_vlm, s4i_vlm
     if gen == "s2":
         out = s2_llm(pred, d, backend)
     else:
         from report_eval.images import overlay_png, radiograph_png
         radio = radiograph_png(film)
-        out = s3_vlm(pred, radio, backend) if gen == "s3" else \
-            s4_vlm(pred, radio, overlay_png(film, source), backend)
+        if gen == "s3":
+            out = s3_vlm(pred, radio, backend)
+        else:
+            vlm = s4i_vlm if gen == "s4i" else s4_vlm
+            out = vlm(pred, radio, overlay_png(film, source), backend)
     extras = {"model": out.model, "latency_s": round(out.latency_s, 3), "raw": out.raw,
               "rejected": out.rejected, "reject_reason": out.reject_reason}
     return out.text, out.claim, extras
@@ -198,13 +204,65 @@ def summary_table(records):
     return "\n".join(lines)
 
 
+FREE_TEXT = {"s3", "s4", "s4i"}
+MIRROR = {"right lung": "left lung", "left lung": "right lung"}
+
+
+def rescore_free_text(records, all_films):
+    """Re-parse S3/S4 text with the current parser, so parser fixes need no model re-run."""
+    truth = {f.key: f.descriptors for f in all_films}
+    out = []
+    for r in records:
+        if r["generator"] not in FREE_TEXT or r.get("error"):
+            out.append(r)
+            continue
+        claim = (image_side_claim if r["generator"] == "s4i" else parse_claim)(r["text"])
+        new = {**r, "claim": dataclasses.asdict(claim) if claim else None,
+               "kind": response_kind(r["text"])}
+        new.update(score_output(claim, truth[r["key"]], r["text"]))
+        side, true_side = (claim.side if claim else None), truth[r["key"]].side
+        new["single_side"] = side in MIRROR and true_side in MIRROR
+        new["mirrored"] = new["single_side"] and MIRROR[side] == true_side
+        out.append(new)
+    return out
+
+
+def vlm_table(records):
+    rows = [r for r in records if r["generator"] in FREE_TEXT and not r.get("error")]
+    if not rows:
+        return ""
+    groups = {}
+    for r in rows:
+        groups.setdefault((r["generator"], r["condition"]), []).append(r)
+    lines = ["| Generator | Heatmap | Specific claim | Non-specific (\"throughout the lungs\") "
+             "| Sees no evidence | Other | One-side claims: correct / mirrored |",
+             "|" + " --- |" * 7]
+    for (gen, cond), rs in sorted(groups.items()):
+        n = len(rs)
+        kinds = {k: sum(r["kind"] == k for r in rs)
+                 for k in ("specific", "non_specific", "no_evidence", "other")}
+        single = [r for r in rs if r["single_side"]]
+        correct = sum(r["side_correct"] for r in single)
+        mirrored = sum(r["mirrored"] for r in single)
+        lines.append("| " + " | ".join(
+            [gen, cond] + [f"{kinds[k]} ({100 * kinds[k] / n:.0f}%)" for k in kinds]
+            + [f"{correct} / {mirrored} of {len(single)}"]) + " |")
+    return "\n".join(lines)
+
+
 def write_summary(args, all_films):
-    records = load_done(args.out)
+    records = rescore_free_text(load_done(args.out), all_films)
     if not records:
         raise SystemExit(f"No records in {args.out}")
     md = ["# Report-generator grid", "",
           "Truth = each film's served heatmap region. Claims are scored against the heatmap, "
           "not against pathology.", "", summary_table(records), ""]
+    vlm = vlm_table(records)
+    if vlm:
+        md += ["## Free-text answers (S3/S4)", "",
+               "S3/S4 claims are re-parsed from the saved text with the current parser. "
+               "'Mirrored' = the model named the opposite single side to the heatmap's, the "
+               "signature of describing image-left/right instead of the patient's.", "", vlm, ""]
     if "s1" in {r["generator"] for r in records}:
         h5 = h5_distribution(all_films)
         md += [f"S1 grounding precision under the permuted control, over {h5['seeds']} "

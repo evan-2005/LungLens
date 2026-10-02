@@ -88,12 +88,39 @@ class ClaimParserTest(unittest.TestCase):
         self.assertEqual(parse_claim("Opacity in the right mid-zone.").zone, "mid")
         self.assertEqual(parse_claim("Left upper lobe consolidation.").zone, "upper")
 
+    def test_locations_in_negated_sentences_are_not_claims(self):
+        # Real Qwen2.5-VL outputs from the pilot.
+        self.assertIsNone(parse_claim("The findings supporting the prediction of Normal are "
+                                      "throughout both lungs, with no visible abnormalities."))
+        self.assertIsNone(parse_claim("The findings are located throughout the lungs, with no "
+                                      "specific area showing a higher likelihood of abnormality."))
+        c = parse_claim("No abnormality in the right lung. Patchy opacity in the left lower zone.")
+        self.assertEqual((c.side, c.zone), ("left lung", "lower"))
+
+    def test_zone_with_several_words_before_the_place(self):
+        c = parse_claim("located in the lower left and right lung fields.")
+        self.assertEqual((c.side, c.zone), ("bilateral", "lower"))
+        self.assertEqual(parse_claim("located in the upper regions of both lungs.").zone, "upper")
+
     def test_ambiguous_sides_are_not_guessed(self):
         self.assertEqual(parse_claim("left upper and right lower opacities").side, "bilateral")
 
     def test_claim_from_descriptors(self):
         self.assertEqual(claim_from_descriptors(LEFT_MID), Claim("left lung", "mid", "patchy"))
         self.assertIsNone(claim_from_descriptors(OUTSIDE))
+
+
+class ResponseKindTest(unittest.TestCase):
+    def test_categories_from_pilot_outputs(self):
+        from report_eval.claims import response_kind
+        self.assertEqual(response_kind("Located in the lower left lung."), "specific")
+        self.assertEqual(response_kind("The findings are located throughout the lungs."),
+                         "non_specific")
+        self.assertEqual(response_kind("The findings that support this prediction are located "
+                                       "in the entire lungs."), "non_specific")
+        self.assertEqual(response_kind("The image does not show any visible abnormalities that "
+                                       "would support a diagnosis of Tuberculosis."), "no_evidence")
+        self.assertEqual(response_kind("Findings consistent with pneumonia."), "other")
 
 
 class ScoringTest(unittest.TestCase):

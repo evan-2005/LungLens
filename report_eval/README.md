@@ -54,4 +54,23 @@ Every output is appended to the JSONL as it is produced (prompt reply, parsed cl
 | S2 pilot, 20 films, local `qwen2.5-coder:7b` | 100% grounded with the served heatmap, silent with none, 0% grounded when permuted; 0 rejections; about 4.4 s per summary on the laptop GPU |
 | S2 prompt wording | With the first prompt, 9 of 14 location sentences (64%) called the heatmap region a finding ("abnormality", "opacity"), including on a film predicted Normal. After telling the model the heatmap is not a finding, 0 of 14 did. The checker now rejects such sentences. |
 
-Not run yet: S3/S4 (no vision model installed locally and no Claude credentials on this machine), the full 245-film S2 run, and the hand validation of the claim parser.
+## VLM results (2026-10-02, Qwen2.5-VL 7B via Ollama, all 245 films)
+
+Raw outputs: `runs/report_eval/vlm_full_qwen25vl7b.jsonl`. About 8 s per answer on the laptop GPU, 0 errors in 1,225 calls.
+
+| Generator | Heatmap | Claims | Grounding precision |
+| --- | --- | --- | --- |
+| S3, radiograph only | none | 6 / 245 | 0% |
+| S4, radiograph + overlay | actual | 125 / 245 | 21.6% |
+| S4 | permuted | 113 / 245 | 18.6% |
+| S4i, same, sides asked in image coordinates | actual | 198 / 245 | 28.3% |
+| S4i | permuted | 203 / 245 | 22.2% |
+
+- **The VLM barely reads the overlay.** Real and swapped heatmaps give nearly the same precision (21.6% vs 18.6%; 28.3% vs 22.2%). S1 and S2 drop from 100% to about 12% and 0%.
+- **Side mirroring is a convention error.** Asked for the patient's side (S4), 18 of 27 one-side claims named the opposite side. Asked for the image side and converted in code (S4i), 52 of 58 were right.
+- **But S4i mostly says the same side.** 79% of one-side served heatmaps are in the patient's right lung (image left), and S4i names that side in 91% of its one-side claims. On the 11 films whose heatmap is in the left lung, it is right 5 times with the real overlay and 2 times with a swapped one: a weak signal on very few films.
+- **Vague answers.** About half of S4's answers are "throughout the lungs" (no location).
+- **No second-reader value.** From the radiograph alone, the VLM says it sees no evidence supporting the classifier on 78 of 84 disease predictions (93%), including 61 of 63 TB predictions.
+- **Claim parser.** First-pass hand review of 40 random S3/S4 answers: 40 / 40 parsed as specified (`runs/report_eval/parser_review_claude_pass.csv`). The answers were formulaic, so this does not stress-test the parser; a human pass on `parser_review.csv` is still needed, and any other model needs its own check.
+
+Not run yet: the full 245-film S2 run, a medical VLM (e.g. MedGemma), and a hosted model.

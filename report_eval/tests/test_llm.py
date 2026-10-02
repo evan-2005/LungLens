@@ -104,6 +104,15 @@ class VLMTest(unittest.TestCase):
         self.assertEqual(out.claim.side, "right lung")
         self.assertIsNone(fake.calls[0]["schema"])
 
+    def test_s4i_asks_for_image_side_and_converts_to_patient_side(self):
+        from report_eval.llm_generators import s4i_vlm
+        fake = FakeBackend("The highlighted region is in the upper left of the image.")
+        out = s4i_vlm(PRED, b"orig", b"overlay", fake)
+        self.assertIn("image", fake.calls[0]["user"].lower())
+        self.assertNotIn("patient's right", fake.calls[0]["system"])
+        self.assertEqual(out.claim.side, "right lung")  # image-left = patient's right
+        self.assertEqual(out.claim.zone, "upper")
+
     def test_s4_sends_radiograph_and_overlay(self):
         fake = FakeBackend("No clear focal abnormality.")
         out = s4_vlm(PRED, b"orig", b"overlay", fake)
